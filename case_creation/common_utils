@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+# function to check required variables
+check_required_vars() {
+  local missing=false
+  for var in "$@"; do
+    if [[ -z "${!var}" ]]; then
+      echo "ERROR: $var is not set"
+      missing=true
+    fi
+  done
+  $missing && exit 1
+}
+
+# function to read a config file and export variables
+read_config() {
+  local config_file="$1"
+
+  if [[ ! -f "$config_file" ]]; then
+    echo "ERROR: Config file '$config_file' not found!"
+    exit 1
+  fi
+
+  # Read key-value pairs, ignoring comments and blank lines
+  while IFS='=' read -r key value; do
+  
+    # ignore empty lines and comments
+    if [[ -z "$key" || "$key" =~ ^# ]]; then
+      continue
+    fi
+    
+    # trim spaces
+    key=$(echo "$key" | tr -d '[:space:]')
+    value=$(echo "$value" | sed 's/^ *//;s/ *$//')
+
+    # remove surrounding quotes (single or double)
+    value=$(echo "$value" | sed 's/^["'\''"]//;s/["'\''"]$//')
+    
+    # assign to a variable using `declare`
+    declare "$key=$value"
+    
+  done < "$config_file"
+}

@@ -1,0 +1,148 @@
+#!/bin/bash
+
+# default values
+test_mode=false
+num_tests=0
+config_file=""
+
+# argument parsing
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --test)
+            test_mode=true
+            num_tests="$2"
+            shift 2  # shift past the flag and its value
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            if [[ -z "$config_file" ]]; then
+                config_file="$1"  # first non-flag argument is the config file
+            else
+                echo "Unexpected argument: $1"
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+# ensure a config file was provided
+if [[ -z "$config_file" ]]; then
+  echo "ERROR: You must specify a config file."
+  exit 1
+fi
+
+config_file="$1"
+
+# source utility functions
+source "$(dirname "$0")/common_utils"
+
+# read and export config variables
+read_config "$config_file"
+
+# ensure required environment variables are set
+base_vars=(
+  CASE_DIR BASE_CASE SRC_DIR OUT_DIR STOP_N RESUBMIT 
+  CHARGENUM PARAM_DIR PARAM_LIST USE_NLMODS EDIT_CLM_PARAMFILE 
+  EDIT_FATES_PARAMFILE
+  )
+check_required_vars "${base_vars[@]}"
+
+# also check the NLMODS_DIR env variable is set if we are using it
+if [[ "$USE_NLMODS" == true ]]; then
+  nl_vars=(NLMODS_DIR)
+  check_required_vars "${nl_vars[@]}"
+fi
+
+# make sure we are editing one of the parameter files
+if [[ "$EDIT_CLM_PARAMFILE" == false && "$EDIT_FATES_PARAMFILE" == false ]]; then
+    echo "ERROR: Must either edit fates or clm paramfile"
+    exit 1
+fi
+
+# check if the parameter list exists
+if [[ ! -f "$PARAM_LIST" ]]; then
+  echo "ERROR: PARAM_LIST file $PARAM_LIST not found!"
+  exit 1
+fi
+
+# get the basename of the base case
+BASE_CASE_NAME=$(basename "$BASE_CASE")
+
+# function to process an ensemble member
+process_ensemble() {
+  
+  local ensemble="$1"
+  echo "Processing ensemble: $ensemble"
+
+  #create a case name
+  case_name="${CASE_DIR}/${BASE_CASE_NAME}_${ensemble}"
+  echo ${case_name}
+	
+  # change to scripts directory and check if successful
+	cd "${SRC_DIR}/cime/scripts" || { echo "ERROR: Failed to change directory to ${SRC_DIR}/cime/scripts"; exit 1; }
+	./create_clone --case "${case_name}" --clone "${BASE_CASE}" --keepexe --cime-output-root "${OUT_DIR}"
+
+  # change to case directory - check if successful
+	cd "${case_name}" || { echo "ERROR: Failed to change directory to ${case_name}"; exit 1; }
+  
+  # update XML settings
+	./xmlchange STOP_N="${STOP_N}"
+	./xmlchange RESUBMIT="${RESUBMIT}"
+	./case.setup
+	./xmlchange PROJECT="${CHARGENUM}"
+  
+  # ensure user_nl_clm exists before modifying it
+  if [[ ! -f user_nl_clm ]]; then
+    echo "ERROR: user_nl_clm file not found!"
+    exit 1
+  fi
+  
+  # get the parameter file name
+  param_file="${PARAM_DIR}/${ensemble}.nc"
+  
+  # process user_nl_clm based on the flag
+  :> user_nl_clm.tmp  # create an empty temp file
+  while read -r line; do
+    if [[ "$EDIT_CLM_PARAMFILE" == true && "$line" =~ ^paramfile[[:space:]]*= ]]; then
+      echo "paramfile = '${param_file}'" >> user_nl_clm.tmp
+    elif [[ "$EDIT_FATES_PARAMFILE" == true && "$line" =~ ^fates_paramfile[[:space:]]*= ]]; then
+      echo "fates_paramfile = '${param_file}'" >> user_nl_clm.tmp
+    else
+      echo "$line" >> user_nl_clm.tmp  # keep everything else unchanged
+    fi
+  done < user_nl_clm
+  mv user_nl_clm.tmp user_nl_clm  # replace original file
+
+ # append namelist modifications if needed
+  if [[ "$USE_NLMODS" == true ]]; then
+    namelist_mods="${NLMODS_DIR}/${ensemble}.txt"
+    if [[ -f "$namelist_mods" ]]; then
+      cat "$namelist_mods" >> user_nl_clm
+    else
+      echo "ERROR: namelist_mods file $namelist_mods not found!"
+      exit 1
+    fi
+  fi
+
+  ./case.submit -a "-l place=group=rack"
+
+}
+
+# process ensembles
+counter=0
+while read -r ensemble; do
+  
+  if [[ "$test_mode" == true && "$counter" -ge "$num_tests" ]]; then
+    echo "Test mode: Stopping after $counter ensembles."
+    break
+  fi
+
+  process_ensemble "$ensemble"  # call function
+
+  ((counter++))
+  
+done < ${PARAM_LIST}

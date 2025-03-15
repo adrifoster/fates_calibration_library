@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+
+if [ $# -lt 1 ]
+then
+  echo "ERROR: please specify config file"
+  exit 1
+fi
+config_file="$1"
+
+# source utility functions
+source "$(dirname "$0")/common_utils"
+
+# read and export config variables
+read_config "$config_file"
+
+# ensure required environment variables are set
+base_vars=(
+  CASE_DIR SRC_DIR OUT_DIR STOP_N RESUBMIT COMPSET 
+  CHARGENUM USER_NL_DIR USER_NL_FILE
+  )
+check_required_vars "${base_vars[@]}"
+
+if [[ "$SPARSE_RUN" == true ]]; then
+  sparse_vars=(MESH_DIR MESH_FILE)
+  check_required_vars "${sparse_vars[@]}"
+fi
+
+# case setup and run
+case_name=${CASE_DIR}/${CASENAME}
+
+# change into cime directory
+cd "${SRC_DIR}/cime/scripts" || { echo "ERROR: Failed to change directory to ${SRC_DIR}/cime/scripts"; exit 1; }
+
+# create a new case
+./create_newcase --case ${case_name} --compset ${COMPSET} --res f19_g17 --project ${CHARGENUM} --run-unsupported
+
+cd "${case_name}" || { echo "ERROR: Failed to change directory to ${case_name}"; exit 1; }
+
+# copy user_nl_clm into the case
+if [[ ! -f ${USER_NL_DIR}/${USER_NL_FILE} ]]; then
+  echo "ERROR: user_nl_clm file not found!"
+  exit 1
+fi
+cp ${USER_NL_DIR}/${USER_NL_FILE} user_nl_clm
+
+# env_run.xml
+./xmlchange RUN_STARTDATE=0001-01-01
+./xmlchange STOP_OPTION=nyears
+./xmlchange STOP_N=${STOP_N}
+./xmlchange RESUBMIT=${RESUBMIT}
+./xmlchange DATM_YR_ALIGN=1
+./xmlchange DATM_YR_START=2000
+./xmlchange DATM_YR_END=2014
+
+./xmlchange CLM_ACCELERATED_SPINUP=off
+
+if [[ "$SPARSE_RUN" == true ]]; then
+
+  if [[ ! -d "$MESH_DIR" ]]; then
+    echo "ERROR: MESH_DIR does not exist!"
+    exit 1
+  fi
+  if [[ ! -f "$MESH_FILE" ]]; then
+    echo "ERROR: MESH_FILE does not exist!"
+    exit 1
+  fi
+  
+  ./xmlchange MASK_MESH=${MESH_DIR}/${MESH_FILE}
+  ./xmlchange ATM_DOMAIN_MESH=${MESH_DIR}/${MESH_FILE}
+  ./xmlchange LND_DOMAIN_MESH=${MESH_DIR}/${MESH_FILE}
+  
+  # env_mach_pes.xml
+  ./xmlchange NTASKS_ATM=16
+  ./xmlchange NTASKS_OCN=112
+  ./xmlchange NTASKS_WAV=112
+  ./xmlchange NTASKS_GLC=112
+  ./xmlchange NTASKS_ICE=112
+  ./xmlchange NTASKS_ROF=112
+  ./xmlchange NTASKS_LND=112
+  ./xmlchange NTASKS_CPL=112
+  
+  ./xmlchange ROOTPE_ATM=0
+  ./xmlchange ROOTPE_LND=16
+  ./xmlchange ROOTPE_OCN=16
+  ./xmlchange ROOTPE_WAV=16
+  ./xmlchange ROOTPE_GLC=16
+  ./xmlchange ROOTPE_ICE=16
+  ./xmlchange ROOTPE_ROF=16
+  ./xmlchange ROOTPE_CPL=16
+
+fi
+
+# env_workflow.xml
+./xmlchange JOB_WALLCLOCK_TIME=06:00:00
+
+# Setup case
+./case.setup
+
+# Generate namelists
+./preview_namelists
+
+# Build case
+./case.build
+
+# Submit case
+./case.submit
+
