@@ -1,5 +1,51 @@
 #!/bin/bash
 
+#==============================================================================
+#
+# Script Name: run_ensemble
+# Description: This script automates the creation and submission of multiple CESM cases 
+#              based on a list of ensemble members. It clones a base case, modifies 
+#              the user_nl_clm file (i.e. parameter file paths), and submits runs.
+# 
+# Usage: ./run_ensemble.sh [options] <config_file>
+#
+# Arguments:
+#   <config_file>     Path to the configuration file containing environment variables.
+#
+# Options:
+#   --test <num>       Run in test mode, processing only <num> ensembles.
+#
+# Requirements:
+#   - Must have the necessary CTSM environment set up.
+#   - Requires a valid configuration file.
+#   - The configuration file must define necessary environment variables.
+#   - The parameter list file (`PARAM_LIST`) must exist.
+#   - The base case (`BASE_CASE`) must be a valid CTSM case.
+#
+# Environment Variables (loaded from config file):
+#   CASE_DIR         Directory where cases will be created.
+#   BASE_CASE        Path to the base CTSM case to clone.
+#   SRC_DIR          Directory containing cime scripts.
+#   OUT_DIR          Output directory for the cases.
+#   STOP_N           Number of years for each submission of the simulation.
+#   RESUBMIT         Number of resubmissions.
+#   CHARGENUM        Project charge number.
+#   PARAM_DIR        Directory containing parameter files.
+#   PARAM_LIST       File listing ensemble parameter file names.
+#   USE_NLMODS       Whether to apply additional namelist modifications (true/false).
+#   EDIT_CLM_PARAMFILE   Whether to modify `paramfile` in `user_nl_clm` (true/false).
+#   EDIT_FATES_PARAMFILE Whether to modify `fates_paramfile` in `user_nl_clm` (true/false).
+#   NLMODS_DIR       Directory containing user_nl_clm modifications to append
+#
+# Example:
+#   ./run_ensemble --test 1 config_file.txt
+#
+# Author: Adrianna Foster
+# Date: 2025-03-14
+# Version: 1.0
+#
+#==============================================================================
+
 # default values
 test_mode=false
 num_tests=0

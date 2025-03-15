@@ -1,5 +1,42 @@
 #!/usr/bin/env bash
 
+#==============================================================================
+#
+# Script Name: setup_run
+# Description: Creates and configures a new CTSM case.
+# Usage: ./setup_run <config_file>
+#
+# Arguments:
+#   <config_file>     Path to the configuration file containing environment variables.
+#
+# Requirements:
+#   - Must have the necessary CTSM environment set up.
+#   - Requires a valid configuration file.
+#   - The configuration file must define necessary environment variables.
+#
+# Environment Variables (loaded from config file):
+#   CASE_DIR         Directory where cases will be created.
+#   SRC_DIR          Directory containing cime scripts.
+#   OUT_DIR          Output directory for the cases.
+#   STOP_N           Number of years for each submission of the simulation.
+#   RESUBMIT         Number of resubmissions.
+#   COMPSET          Compset to use
+#   CHARGENUM        Project charge number.
+#   USER_NL_DIR      Directory containig user_nl_* files
+#   USER_NL_FILE     user_nl_clm file name to use
+#   SPARSE_RUN       Whether run is sparse or global (true/false).
+#   MESH_DIR         Directory containig mesh files
+#   MESH_FILE        mesh file name to use
+#
+# Example:
+#   ./setup_run config_file.txt
+#
+# Author: Adrianna Foster
+# Date: 2025-03-14
+# Version: 1.0
+#
+#==============================================================================
+
 if [ $# -lt 1 ]
 then
   echo "ERROR: please specify config file"
