@@ -3,7 +3,7 @@
 #==============================================================================
 #
 # Script Name: run_ensemble
-# Description: This script automates the creation and submission of multiple CESM cases 
+# Description: This script automates the creation and submission of multiple CTSM cases 
 #              based on a list of ensemble members. It clones a base case, modifies 
 #              the user_nl_clm file (i.e. parameter file paths), and submits runs.
 # 
