@@ -1,6 +1,8 @@
 """Functions to assist with global analysis of observations and model outputs"""
 
 import functools
+import os
+from datetime import date
 import xarray as xr
 import numpy as np
 
@@ -66,27 +68,35 @@ def get_zonal(
     return by_lat
 
 
-def month_wts(nyears: int) -> xr.DataArray:
-    """Helper function for summing up a monthly variable by days
+def get_monthly_max(monthly_mean: xr.DataArray) -> xr.DataArray:
+    """Calculates the month of the maximum value of a monthly data array
 
     Args:
-        nyears (int): number of years in your Dataset
+        monthly_mean (xr.DataArray): monthly data array
 
     Returns:
-        xr.DataArray: A DataArray with number of days per month tiled by number of years
+        xr.DataArray: output maximum month
     """
-    days_pm = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    return xr.DataArray(np.tile(days_pm, nyears), dims="time")
+
+    # get sum so that we can get rid of anything less than 0.0
+    month_sum = monthly_mean.sum(dim="month")
+
+    # calculate the month of the maximum value
+    month_of_max = monthly_mean.idxmax(dim="month")
+    month_of_max = month_of_max.where(np.abs(month_sum) > 0.0)
+
+    return month_of_max
 
 
 def calculate_annual_mean(
-    data_array: xr.DataArray, conversion_factor: float = 1 / 365
+    data_array: xr.DataArray, conversion_factor: float = 1 / 365, new_units: str = ""
 ) -> xr.DataArray:
     """Calculates annual mean of an input DataArray, applies a conversion factor if supplied
 
     Args:
         da (xr.DataArray): input DataArray
         conversion_factor (float, optional): Conversion factor. Defaults to 1/365.
+        new_units (str, optional): new units, defaults to empty
 
     Returns:
         xr.DataArray: output DataArray
@@ -95,7 +105,30 @@ def calculate_annual_mean(
     months = data_array["time.daysinmonth"]
     annual_mean = conversion_factor * (months * data_array).groupby("time.year").sum()
     annual_mean.name = data_array.name
+    if new_units != "":
+        annual_mean.attrs["units"] = new_units
     return annual_mean
+
+
+def calculate_monthly_mean(
+    data_array: xr.DataArray, conversion_factor: float
+) -> xr.DataArray:
+    """Calculates monthly mean of an input DataArray, applies a conversion factor
+
+    Args:
+        da (xr.DataArray): input DataArray
+        conversion_factor (float): conversion factor
+
+    Returns:
+        xr.DataArray: output DataArray
+    """
+
+    months = data_array["time.daysinmonth"]
+    monthly_mean = (
+        conversion_factor * (months * data_array).groupby("time.month").mean()
+    )
+    monthly_mean.name = data_array.name
+    return monthly_mean
 
 
 def preprocess(data_set: xr.Dataset, data_vars: list[str]) -> xr.Dataset:
@@ -117,6 +150,7 @@ def get_clm_ds(
     start_year: int,
     fates: bool = True,
     sparse: bool = True,
+    ensemble: bool = False,
 ) -> xr.Dataset:
     """Reads in a CLM dataset and does some initial post-processing
 
@@ -126,6 +160,7 @@ def get_clm_ds(
         start_year (int): start year
         fates (bool, optional): FATES or CLM. Defaults to True.
         sparse (bool, optional): sparse or full grid. Defaults to True.
+        ensemble (bool, optional): is the ds part of an ensemble? Defaults to False.
 
     Returns:
         xr.Dataset: output dataset
@@ -182,6 +217,10 @@ def get_clm_ds(
     ds["RN"].attrs["units"] = "W m-2"
     ds["RN"].attrs["long_name"] = "surface net radiation"
 
+    ds["TempAir"] = ds.TBOT - 273.15
+    ds["TempAir"].attrs["units"] = "degrees C"
+    ds["TempAir"].attrs["long_name"] = ds["TBOT"].attrs["long_name"]
+
     ds["Temp"] = ds.TSA - 273.15
     ds["Temp"].attrs["units"] = "degrees C"
     ds["Temp"].attrs["long_name"] = ds["TSA"].attrs["long_name"]
@@ -191,6 +230,12 @@ def get_clm_ds(
         extras = ["grid1d_lat", "grid1d_lon"]
         for extra in extras:
             ds[extra] = ds0[extra]
+
+    if ensemble:
+        ds["ensemble"] = os.path.basename(files[0]).split("_")[-1]
+
+    ds.attrs["Date"] = str(date.today())
+    ds.attrs["Original"] = files[0]
 
     return ds
 
@@ -287,3 +332,76 @@ def global_from_sparse(
     )
 
     return out_map
+
+
+def get_sparse_maps(
+    ds: xr.Dataset, sparse_grid: xr.Dataset, land_frac: xr.DataArray, varlist: list[str]
+) -> xr.Dataset:
+    """Gets a dataset of global maps of a list of variables from a sparse dataset
+
+    Args:
+        ds (xr.Dataset): sparse grid dataset
+        sparse_grid (xr.Dataset): sparse grid file
+        land_frac (xr.DataArray): land fraction [0-1]
+        varlist (list[str]): list of variables
+
+    Returns:
+        xr.Dataset: output dataset
+    """
+
+    # loop through each variable and map from sparse to global
+    ds_list = []
+    for var in varlist:
+        var_ds = global_from_sparse(sparse_grid, ds[var], ds).to_dataset(name=var)
+        var_ds[var] = var_ds[var] * land_frac
+        ds_list.append(var_ds)
+
+    return xr.merge(ds_list)
+
+
+def create_target_grid(file: str, var: str) -> xr.Dataset:
+    """Creates a target grid to resample to
+
+    Args:
+        file (str): path to dataset to regrid to
+        var (str): variable to create the grid off of
+
+    Returns:
+        xr.Dataset: output dataset
+    """
+
+    ds = xr.open_dataset(file)
+    target_grid = ds[var].mean(dim="time")
+    target_grid["landmask"] = ds["landmask"].fillna(0)
+    target_grid["landfrac"] = ds["landfrac"].fillna(0)
+
+    return target_grid
+
+
+def get_annual_means(ds, varlist, var_dict, sparse=False):
+    ds_list = []
+    for var in varlist:
+        ds_list.append(
+            calculate_annual_mean(
+                ds[var], var_dict[var]["cf_time"], var_dict[var]["annual_units"]
+            ).to_dataset(name=var)
+        )
+
+    ds_out = xr.merge(ds_list)
+    if sparse:
+        ds_out["grid1d_lat"] = ds.grid1d_lat
+        ds_out["grid1d_lon"] = ds.grid1d_lon
+
+    return ds_out
+
+
+def get_sparse_area_means(ds, domain, varlist, var_dict, land_area, biome):
+    ds_list = []
+    for var in varlist:
+        ds_list.append(
+            area_mean_from_sparse(
+                ds[var], biome, domain, var_dict[var]["cf_area"], land_area
+            ).to_dataset(name=var)
+        )
+
+    return xr.merge(ds_list)

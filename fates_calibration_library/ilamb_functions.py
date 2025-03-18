@@ -1,29 +1,27 @@
 """Methods for processing and analyzing ILAMB data"""
 
 import os
-import math
 from datetime import date
 from typing import Dict, Optional
 import xarray as xr
 import numpy as np
 import pandas as pd
 import xesmf as xe
-import matplotlib.pyplot as plt
 
-from fates_calibration_library.analysis_functions import month_wts, get_zonal
-from fates_calibration_library.plotting_functions import generate_subplots, map_function
-from fates_calibration_library.plotting_functions import (
-    round_down,
-    round_up,
-    get_blank_plot,
+
+from fates_calibration_library.analysis_functions import (
+    calculate_monthly_mean,
+    calculate_annual_mean,
+    get_monthly_max,
 )
+from fates_calibration_library.utils import config_to_dict
 
 
-def get_all_ilamb_data(config: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
+def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
     """Processes ILAMB datasets: reads, converts to annual values, regrids, and saves.
 
     Args:
-        config (dict): Configuration containing top_dir, clobber, out_dir, start_date,
+        config_dict (dict): Configuration containing top_dir, clobber, out_dir, start_date,
                         end_date, and user.
         ilamb_dict (dict): Dictionary with ILAMB dataset information.
         target_grid (xr.Dataset): Target grid for regridding.
@@ -31,17 +29,27 @@ def get_all_ilamb_data(config: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
     """
 
     # create output directory if it doesn't exist
-    os.makedirs(config["out_dir"], exist_ok=True)
+    os.makedirs(config_dict["out_dir"], exist_ok=True)
 
     # process each dataset
     for dataset, attributes in ilamb_dict.items():
-        process_dataset(config, ilamb_dict, dataset, attributes, target_grid)
+        out_file = os.path.join(
+            config_dict["out_dir"],
+            f"{attributes['model']}_{attributes['out_var'].upper()}.nc",
+        )
+
+        # skip if file exists and clobber is False
+        if os.path.isfile(out_file) and not config_dict["clobber"]:
+            print(f"File {out_file} for {dataset} exists, skipping")
+            return
+
+        ds_out = process_dataset(config_dict, ilamb_dict, attributes, target_grid)
+        ds_out.to_netcdf(out_file, mode="w")
 
 
 def process_dataset(
-    config: dict,
+    config_dict: dict,
     ilamb_dict: dict,
-    dataset: str,
     attributes: dict,
     target_grid: xr.DataArray,
 ):
@@ -55,51 +63,128 @@ def process_dataset(
         target_grid (xr.DataArray): target grid for regridding
     """
 
-    model = attributes["model"]
-    out_var = attributes["out_var"]
-    file_name = f"{model}_{out_var.upper()}.nc"
-    out_file = os.path.join(config["out_dir"], file_name)
-
-    # skip if file exists and clobber is False
-    if os.path.isfile(out_file) and not config["clobber"]:
-        print(f"File {out_file} for {dataset} exists, skipping")
-        return
-
     # read or compute ILAMB data
     ilamb_dat, original_file = read_ilamb_data(
-        config["top_dir"], ilamb_dict, model, attributes, config
+        config_dict["top_dir"], ilamb_dict, attributes, config_dict
     )
 
-    # prepare metadata for get_annual_ds
+    # prepare metadata
     metadata = {
         "units": attributes["units"],
         "longname": attributes["longname"],
         "original_file": original_file,
-        "user": config["user"],
+        "user": config_dict["user"],
     }
-    # convert to annual dataset
+
+    # calculate annual dataset
     annual_ds = get_annual_ds(
         ilamb_dat,
         attributes["in_var"],
-        out_var,
+        attributes["out_var"],
         get_conversion_factor(attributes["conversion_factor"]),
         metadata,
     )
 
-    # Regrid and write to file
-    regridded_ds = regrid_ilamb_ds(annual_ds, target_grid, out_var)
-    regridded_ds.to_netcdf(out_file, mode="w")
+    # regrid annual
+    regridded_annual = regrid_ilamb_ds(annual_ds, target_grid, attributes["out_var"])
+
+    # monthly mean
+    monthly_mean = calculate_monthly_mean(
+        ilamb_dat[attributes["in_var"]],
+        get_conversion_factor(attributes["conversion_factor"]),
+    )
+
+    # calculate month of maximum value
+    month_of_max = get_monthly_max(monthly_mean).to_dataset(
+        name=f"{attributes['out_var']}_month_of_max"
+    )
+
+    # regrid month of max
+    regridded_monthly = regrid_ilamb_ds(
+        month_of_max,
+        target_grid,
+        f"{attributes['out_var']}_month_of_max",
+        method="nearest_s2d",
+    )
+
+    # get climatology
+    climatology_ds = get_ilamb_climatology(
+        monthly_mean,
+        area_cf=get_conversion_factor(attributes["area_conversion_factor"]),
+    )
+
+    # return all files combined
+    return xr.merge([regridded_monthly, regridded_annual, climatology_ds])
+
+
+def get_ilamb_climatology(
+    monthly_mean: xr.DataArray, area_cf: float = None
+) -> xr.Dataset:
+    """Returns dataset of climatology of the monthly input data
+
+    Args:
+        monthly_mean (xr.DataArray): monthly mean values
+        area_cf (float, optional): area conversion factor. Defaults to None.
+
+    Returns:
+        xr.Dataset: climatology dataset
+    """
+
+    # calculate cell areas
+    lons = monthly_mean.lon.values
+    lats = np.array(sorted(monthly_mean.lat.values))
+    areas = cell_areas(lats, lons)
+    land_area = xr.DataArray(areas, coords={"lat": lats, "lon": lons})
+    land_area = land_area * 1e-6
+
+    if area_cf is not None:
+        climatology = (
+            (monthly_mean * land_area * area_cf)
+            .sum(dim=["lat", "lon"])
+            .to_dataset(name=f"{monthly_mean.name}_cycle")
+        )
+    else:
+        climatology = monthly_mean.mean(dim=["lat", "lon"])
+
+    # calculate anomaly
+    climatology_mean = climatology[f"{monthly_mean.name}_cycle"].mean(dim="month")
+    monthly_anomaly = (
+        climatology[f"{monthly_mean.name}_cycle"] - climatology_mean
+    ).to_dataset(name=f"{monthly_mean.name}_anomaly")
+
+    climatology_ds = xr.merge([climatology, monthly_anomaly])
+
+    return climatology_ds
+
+
+def build_file_paths(top_dir, sub_dirs, model, filenames):
+    """
+    Constructs file paths from top directory, subdirectories, model name, and filenames.
+
+    Args:
+        top_dir (str): The top-level directory.
+        sub_dirs (list of str): List of subdirectories.
+        model (str): The model name.
+        filenames (list of str): List of filenames.
+
+    Returns:
+        str: A formatted string joining the paths with " and ".
+    """
+    paths = [
+        os.path.join(top_dir, sub_dir, model, filename)
+        for sub_dir, filename in zip(sub_dirs, filenames)
+    ]
+    return " and ".join(paths)
 
 
 def read_ilamb_data(
-    top_dir: str, ilamb_dict: dict, model: str, attributes: dict, config: dict
+    top_dir: str, ilamb_dict: dict, attributes: dict, config: dict
 ) -> tuple[xr.Dataset, str]:
     """Handles reading or computing different types of ILAMB datasets
 
     Args:
         top_dir (str): top ILAMB directory
         ilamb_dict (dict): Dictionary with ILAMB dataset information.
-        model (str): model name
         attributes (dict): dictionary with attributes about this ILAMB dataset
         config (dict): Configuration containing top_dir, clobber, out_dir,
         start_date, end_date.
@@ -107,8 +192,6 @@ def read_ilamb_data(
     Returns:
         tuple[xr.Dataset, str]: output dataset and string for original file
     """
-
-    out_var = attributes["out_var"]
 
     # create the filter_options dictionary
     filter_options = {
@@ -118,8 +201,11 @@ def read_ilamb_data(
         "min_val": get_filter_values(attributes.get("min_val")),
     }
 
-    if out_var == "ef":
-        le_dict, sh_dict = ilamb_dict[f"{model}_LE"], ilamb_dict[f"{model}_SH"]
+    if attributes["out_var"] == "ef":
+        le_dict, sh_dict = (
+            ilamb_dict[f"{attributes['model']}_LE"],
+            ilamb_dict[f"{attributes['model']}_SH"],
+        )
         ilamb_dat = get_ef_ds(
             top_dir,
             attributes["in_var"],
@@ -127,13 +213,18 @@ def read_ilamb_data(
             sh_dict,
             filter_options,
         )
-        original_file = (
-            f"{os.path.join(top_dir, le_dict['sub_dir'], model, le_dict['filename'])} and "
-            f"{os.path.join(top_dir, sh_dict['sub_dir'], model, sh_dict['filename'])}"
+        original_file = build_file_paths(
+            top_dir,
+            [le_dict["sub_dir"], sh_dict["sub_dir"]],
+            attributes["model"],
+            [le_dict["filename"], sh_dict["filename"]],
         )
 
-    elif out_var == "albedo":
-        rsds_dict, rsus_dict = ilamb_dict[f"{model}_RSDS"], ilamb_dict[f"{model}_FSR"]
+    elif attributes["out_var"] == "albedo":
+        rsds_dict, rsus_dict = (
+            ilamb_dict[f"{attributes['model']}_RSDS"],
+            ilamb_dict[f"{attributes['model']}_FSR"],
+        )
         ilamb_dat = get_albedo_ds(
             top_dir,
             attributes["in_var"],
@@ -141,9 +232,11 @@ def read_ilamb_data(
             rsus_dict,
             filter_options,
         )
-        original_file = (
-            f"{os.path.join(top_dir, rsds_dict['sub_dir'], model, rsds_dict['filename'])} and "
-            f"{os.path.join(top_dir, rsus_dict['sub_dir'], model, rsus_dict['filename'])}"
+        original_file = build_file_paths(
+            top_dir,
+            [rsds_dict["sub_dir"], rsus_dict["sub_dir"]],
+            attributes["model"],
+            [rsds_dict["filename"], rsus_dict["filename"]],
         )
 
     else:
@@ -151,7 +244,7 @@ def read_ilamb_data(
         file_info = {
             "top_dir": top_dir,
             "sub_dir": attributes["sub_dir"],
-            "model": model,
+            "model": attributes["model"],
             "filename": attributes["filename"],
         }
 
@@ -159,12 +252,10 @@ def read_ilamb_data(
         ilamb_dat = get_ilamb_ds(file_info, attributes["in_var"], filter_options)
 
         # construct original file name
-        original_file = os.path.join(
-            top_dir, attributes["sub_dir"], model, attributes["filename"]
+        original_file = build_file_paths(
+            top_dir, attributes["sub_dir"], attributes["model"], attributes["filename"]
         )
 
-    ilamb_dat[attributes['in_var']] = ilamb_dat[attributes['in_var']].fillna(0)
-    
     return ilamb_dat, original_file
 
 
@@ -465,15 +556,9 @@ def get_annual_ds(
         xr.Dataset: output dataset
     """
 
-    # calculate cell areas
-    lons = ds.lon.values
-    lats = np.array(sorted(ds.lat.values))
-    areas = cell_areas(lats, lons)
-    land_area = xr.DataArray(areas, coords={"lat": lats, "lon": lons})
-
     # calculate annual values
     if len(ds.time) > 1:
-        annual = get_annual_obs(ds, in_var, conversion_factor)
+        annual = calculate_annual_mean(ds[in_var], conversion_factor)
     else:
         annual = ds[in_var].isel(time=0).drop_vars(["time"])
 
@@ -481,10 +566,8 @@ def get_annual_ds(
     annual_ds[out_var].attrs["units"] = metadata["units"]
     annual_ds[out_var].attrs["long_name"] = metadata["longname"]
 
-    # add in land area
-    annual_ds["land_area"] = land_area
-    annual_ds["land_area"].attrs["units"] = "m2"
-    annual_ds["land_area"].attrs["long_name"] = "land area"
+    # fill NAs with 0
+    annual_ds[out_var] = annual_ds[out_var].fillna(0)
 
     # add some global attributes
     annual_ds.attrs["Original"] = metadata["original_file"]
@@ -492,46 +575,6 @@ def get_annual_ds(
     annual_ds.attrs["Author"] = metadata["user"]
 
     return annual_ds
-
-
-def get_annual_obs(ds: xr.Dataset, var: str, conversion_factor: float) -> xr.Dataset:
-    """Sums the annual values for a variable, using a conversion factor
-
-    Args:
-        ds (xr.Dataset): Dataset
-        var (str): variable to sum
-        conversion_factor (float): conversion factor
-
-    Returns:
-        xr.DataArray: output annual sum
-    """
-
-    # calculate annual values
-    nyears = len(np.unique(ds["time.year"]))
-    annual = (
-        conversion_factor * (ds[var] * month_wts(nyears)).groupby("time.year").sum()
-    )
-
-    return annual
-
-
-def create_target_grid(file: str, var: str) -> xr.Dataset:
-    """Creates a target grid to resample to
-
-    Args:
-        file (str): path to dataset to regrid to
-        var (str): variable to create the grid off of
-
-    Returns:
-        xr.Dataset: output dataset
-    """
-
-    ds = xr.open_dataset(file)
-    target_grid = ds[var].mean(dim="time")
-    target_grid['landmask'] = ds['landmask'].fillna(0)
-    target_grid['landfrac'] = ds['landfrac'].fillna(0)
-
-    return target_grid
 
 
 def regrid_ilamb_ds(
@@ -557,7 +600,7 @@ def regrid_ilamb_ds(
     # regrid
     regridder = xe.Regridder(ds, target_grid, method)
     ds_regrid = regridder(ds)
-    ds_regrid = ds_regrid * target_grid.landmask
+    ds_regrid[var] = ds_regrid[var] * target_grid.landmask
     ds_regrid[var].attrs = ds[var].attrs
 
     ds_regrid.attrs = ds.attrs
@@ -580,16 +623,13 @@ def extract_land_area(land_area_file: str) -> xr.Dataset:
     return land_area
 
 
-def compile_ilamb_datasets(
-    out_dir: str, ilamb_dict: dict, land_area_file: str
-) -> xr.Dataset:
+def compile_ilamb_datasets(out_dir: str, ilamb_dict: dict) -> xr.Dataset:
     """Compiles all regridded ILAMB datasets, computes average and variance over years,
     and merges into a single dataset
 
     Args:
         out_dir (str): output directory where files are located
         ilamb_dict (dict): dictionary with information about ILAMB data
-        land_area_file (str): path to CLM history file with land area on it
 
     Returns:
         xr.Dataset: compiled dataset
@@ -672,204 +712,6 @@ def get_model_da(ds: xr.Dataset, var: str, models: list[str]) -> xr.DataArray:
         xr.DataArray: output data array
     """
     return ds[var].where(ds.model.isin(models), drop=True)
-
-
-def plot_global(
-    da: xr.DataArray,
-    varname: str,
-    units: str,
-    cmap: str,
-    diverging_cmap: bool = False,
-):
-    """Plots a global data array of ILAMB models, one subplot per model
-
-    Args:
-        da (xr.DataArray): data array
-        varname (str): variable name for legend
-        units (str): units for legend
-        cmap (str): colormap to use
-        diverging_cmap (bool, optional): whether the colormap is a diverging scale.
-                                    Defaults to False.
-    """
-
-    vmin = da.min().values
-    vmax = da.max().values
-    models = da.model.values
-    num_plots = len(models)
-
-    # get the emtpy subplots
-    figure, axes = generate_subplots(num_plots)
-
-    if num_plots > 1:
-        axes = axes.flatten(order="F")
-        for idx, ax in enumerate(axes):
-            pcm = map_function(
-                ax,
-                da.sel(model=models[idx]),
-                models[idx],
-                cmap,
-                vmax,
-                vmin,
-                diverging_cmap=diverging_cmap,
-            )
-        cbar = figure.colorbar(
-            pcm, ax=axes.ravel().tolist(), shrink=0.5, orientation="horizontal"
-        )
-    else:
-        pcm = map_function(
-            axes[0],
-            da.sel(model=models[0]),
-            models[0],
-            cmap,
-            vmax,
-            vmin,
-            diverging_cmap=diverging_cmap,
-        )
-        cbar = figure.colorbar(pcm, ax=axes[0], shrink=0.5, orientation="horizontal")
-    cbar.set_label(f"{varname} ({units})", size=10, fontweight="bold")
-
-
-def plot_by_lat(
-    da: xr.DataArray,
-    units: str,
-    var: str,
-    varname: str,
-    conversion_config: dict = None,
-):
-    """Plots zonal (by latitude) ILAMB data for each model
-
-    Args:
-        da (xr.DataArray): data array
-        units (str): units description for by_latitude data
-        var (str): variable plotting
-        varname (str): variable name for axes
-        conversion_config (dict, optional): configuration dictionary with 'land_area' and
-                'conversion_factor'. Defaults to None.
-    """
-
-    conversion_config = conversion_config or {
-        "land_area": None,
-        "conversion_factor": None,
-    }
-
-    # get by latitude
-    by_lat = get_zonal(
-        da,
-        units,
-        conversion_config["land_area"],
-        conversion_config["conversion_factor"],
-    )
-
-    # turn into pandas data frame for easier plotting
-    df = pd.DataFrame(
-        {
-            "lat": np.tile(by_lat.lat, len(by_lat.model)),
-            "model": np.repeat(by_lat.model, len(by_lat.lat)),
-            var: by_lat.values.flatten(),
-        }
-    )
-
-    # get min/max values
-    minval = df[var].min()
-    minvar = round_up(np.abs(minval)) * -1.0 if minval < 0 else round_down(minval)
-    maxvar = round_up(df[var].max())
-
-    # get a blank plot
-    get_blank_plot()
-
-    # add latitude-specific ticks/lines
-    plt.xlim(minvar, maxvar)
-    plt.ylim(-90, 90)
-
-    plt.yticks(
-        range(-90, 91, 15), [str(x) + "º" for x in range(-90, 91, 15)], fontsize=10
-    )
-    plt.xticks(fontsize=10)
-
-    for lat in range(-90, 91, 15):
-        plt.plot(
-            range(math.floor(minvar), math.ceil(maxvar) + 1),
-            [lat] * len(range(math.floor(minvar), math.ceil(maxvar) + 1)),
-            "--",
-            lw=0.5,
-            color="black",
-            alpha=0.3,
-        )
-
-    plt.tick_params(bottom=False, top=False, left=False, right=False)
-
-    cols = [
-        "#e60049",
-        "#0bb4ff",
-        "#50e991",
-        "#e6d800",
-        "#9b19f5",
-        "#ffa300",
-        "#dc0ab4",
-        "#b3d4ff",
-        "#00bfa0",
-    ]
-
-    # plot models
-    for rank, model in enumerate(np.unique(df.model.values)):
-        data = df[df.model == model]
-        plt.plot(data[var].values, data.lat.values, lw=2, color=cols[rank], label=model)
-
-    plt.ylabel("Latitude (º)", fontsize=11)
-    plt.xlabel(f"Annual {varname} ({units})", fontsize=11)
-    plt.title(
-        f"Observed Annual {varname}" + " by latitude for different data products",
-        fontsize=11,
-    )
-    plt.legend(loc="upper right")
-
-
-def plot_ilamb_var(
-    ilamb_dat: xr.Dataset,
-    var: str,
-    plot_config: dict,
-):
-    """Plots ILAMB data, globally and by latitude, for a variable for all models
-
-    Args:
-        ilamb_dat (xr.Dataset): input ILAMB compiled dataset
-        var (str): variable to plot
-        plot_config (dict): configuration dictionary with keys:
-            - models (list[str]): list of ILAMB models
-            - conversion_factor (float): conversion factor for going to latitude sums
-            - varname (str): variable name for plotting
-            - global_units (str): global units for axes
-            - lat_units (str): latitude units for axes
-            - cmap (str): color map for global plot
-            - diverging_cmap (bool): whether the cmap is diverging or not
-    """
-
-    # get the data for just this variable
-    da = get_model_da(ilamb_dat, var, plot_config["models"])
-
-    # plot globally
-    plot_global(
-        da,
-        plot_config["varname"],
-        plot_config["global_units"],
-        plot_config["cmap"],
-        diverging_cmap=plot_config["diverging_cmap"],
-    )
-
-    # get conversion factor
-    conversion_factor = plot_config.get("conversion_factor", None)
-
-    # plot by latitude
-    if conversion_factor is not None:
-        conversion_dict = {
-            "land_area": ilamb_dat.land_area,
-            "conversion_factor": conversion_factor,
-        }
-        plot_by_lat(
-            da, plot_config["lat_units"], var, plot_config["varname"], conversion_dict
-        )
-    else:
-        plot_by_lat(da, plot_config["lat_units"], var, plot_config["varname"])
 
 
 def average_obs_across_models(
@@ -968,3 +810,27 @@ def filter_df(df: pd.DataFrame, filter_vars: list[str], tol: float) -> pd.DataFr
     df = df.dropna()
 
     return df
+
+
+def get_plotting_dict(config_file: str) -> dict:
+    """Returns a plotting dictionary from a config file path
+
+    Args:
+        config_file (str): path to config file
+
+    Returns:
+        dict: dictionary with information about plotting ILAMB data
+    """
+
+    plotting_dict = config_to_dict(config_file)
+    for _, attributes in plotting_dict.items():
+        attributes["models"] = [
+            model.strip() for model in attributes["models"].split(",")
+        ]
+        if attributes["conversion_factor"] == "None":
+            attributes["conversion_factor"] = None
+        else:
+            try:
+                attributes["conversion_factor"] = float(attributes["conversion_factor"])
+            except ValueError:
+                pass
