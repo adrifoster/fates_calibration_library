@@ -372,6 +372,7 @@ def create_target_grid(file: str, var: str) -> xr.Dataset:
 
     ds = xr.open_dataset(file)
     target_grid = ds[var].mean(dim="time")
+    target_grid['area'] = ds['area'].fillna(0)
     target_grid["landmask"] = ds["landmask"].fillna(0)
     target_grid["landfrac"] = ds["landfrac"].fillna(0)
 

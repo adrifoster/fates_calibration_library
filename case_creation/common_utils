@@ -66,7 +66,7 @@ read_config() {
     value=$(echo "$value" | sed 's/^["'\''"]//;s/["'\''"]$//')
     
     # assign to a variable using `declare`
-    declare "$key=$value"
+    export "$key=$value"
     
   done < "$config_file"
 }

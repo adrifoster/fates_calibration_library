@@ -13,8 +13,9 @@ from fates_calibration_library.plotting_functions import (
     round_up,
     get_blank_plot,
     generate_subplots,
-    map_function
+    map_function,
 )
+from fates_calibration_library.utils import config_to_dict, str_to_bool
 
 
 def plot_global(
@@ -22,6 +23,7 @@ def plot_global(
     varname: str,
     units: str,
     cmap: str,
+    vlims: list[float] = [],
     diverging_cmap: bool = False,
 ):
     """Plots a global data array of ILAMB models, one subplot per model
@@ -31,12 +33,17 @@ def plot_global(
         varname (str): variable name for legend
         units (str): units for legend
         cmap (str): colormap to use
+        vlims (list[float]): variables limits, defaults to empty
         diverging_cmap (bool, optional): whether the colormap is a diverging scale.
                                     Defaults to False.
     """
 
-    vmin = da.min().values
-    vmax = da.max().values
+    if len(vlims) == 0:
+        vmin = da.min().values
+        vmax = da.max().values
+    else:
+        vmin = vlims[0]
+        vmax = vlims[1]
     models = da.model.values
     num_plots = len(models)
 
@@ -171,6 +178,7 @@ def plot_ilamb_var(
     ilamb_dat: xr.Dataset,
     var: str,
     plot_config: dict,
+    vlims: list[float] = [],
 ):
     """Plots ILAMB data, globally and by latitude, for a variable for all models
 
@@ -185,6 +193,7 @@ def plot_ilamb_var(
             - lat_units (str): latitude units for axes
             - cmap (str): color map for global plot
             - diverging_cmap (bool): whether the cmap is diverging or not
+        vlims (list[float]): variables limits [min,max], defaults to empty
     """
 
     # get the data for just this variable
@@ -196,6 +205,7 @@ def plot_ilamb_var(
         plot_config["varname"],
         plot_config["global_units"],
         plot_config["cmap"],
+        vlims=vlims,
         diverging_cmap=plot_config["diverging_cmap"],
     )
 
@@ -213,3 +223,28 @@ def plot_ilamb_var(
         )
     else:
         plot_by_lat(da, plot_config["lat_units"], var, plot_config["varname"])
+
+
+def get_plotting_dict(config_file: str) -> dict:
+    """Returns a plotting dictionary from a config file path
+
+    Args:
+        config_file (str): path to config file
+
+    Returns:
+        dict: dictionary with information about plotting ILAMB data
+    """
+
+    plotting_dict = config_to_dict(config_file)
+    for variable, attributes in plotting_dict.items():
+        attributes["models"] = [
+            model.strip() for model in attributes["models"].split(",")
+        ]
+        if attributes["conversion_factor"] == "None":
+            attributes["conversion_factor"] = None
+        else:
+            attributes["conversion_factor"] = float(attributes["conversion_factor"])
+        plotting_dict[variable] = attributes
+        attributes['diverging_cmap'] = str_to_bool(attributes['diverging_cmap'])
+            
+    return plotting_dict

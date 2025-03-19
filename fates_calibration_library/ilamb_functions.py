@@ -14,7 +14,6 @@ from fates_calibration_library.analysis_functions import (
     calculate_annual_mean,
     get_monthly_max,
 )
-from fates_calibration_library.utils import config_to_dict
 
 
 def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
@@ -110,6 +109,7 @@ def process_dataset(
     # get climatology
     climatology_ds = get_ilamb_climatology(
         monthly_mean,
+        attributes['out_var'],
         area_cf=get_conversion_factor(attributes["area_conversion_factor"]),
     )
 
@@ -118,12 +118,13 @@ def process_dataset(
 
 
 def get_ilamb_climatology(
-    monthly_mean: xr.DataArray, area_cf: float = None
+    monthly_mean: xr.DataArray, out_var: str, area_cf: float = None
 ) -> xr.Dataset:
     """Returns dataset of climatology of the monthly input data
 
     Args:
         monthly_mean (xr.DataArray): monthly mean values
+        out_var (str): name of output variable
         area_cf (float, optional): area conversion factor. Defaults to None.
 
     Returns:
@@ -141,16 +142,16 @@ def get_ilamb_climatology(
         climatology = (
             (monthly_mean * land_area * area_cf)
             .sum(dim=["lat", "lon"])
-            .to_dataset(name=f"{monthly_mean.name}_cycle")
+            .to_dataset(name=f"{out_var}_cycle")
         )
     else:
         climatology = monthly_mean.mean(dim=["lat", "lon"])
 
     # calculate anomaly
-    climatology_mean = climatology[f"{monthly_mean.name}_cycle"].mean(dim="month")
+    climatology_mean = climatology[f"{out_var}_cycle"].mean(dim="month")
     monthly_anomaly = (
-        climatology[f"{monthly_mean.name}_cycle"] - climatology_mean
-    ).to_dataset(name=f"{monthly_mean.name}_anomaly")
+        climatology[f"{out_var}_cycle"] - climatology_mean
+    ).to_dataset(name=f"{out_var}_anomaly")
 
     climatology_ds = xr.merge([climatology, monthly_anomaly])
 
@@ -623,13 +624,14 @@ def extract_land_area(land_area_file: str) -> xr.Dataset:
     return land_area
 
 
-def compile_ilamb_datasets(out_dir: str, ilamb_dict: dict) -> xr.Dataset:
+def compile_ilamb_datasets(out_dir: str, ilamb_dict: dict, land_area: xr.DataArray) -> xr.Dataset:
     """Compiles all regridded ILAMB datasets, computes average and variance over years,
     and merges into a single dataset
 
     Args:
         out_dir (str): output directory where files are located
         ilamb_dict (dict): dictionary with information about ILAMB data
+        land_area (xr.DataArray): land area
 
     Returns:
         xr.Dataset: compiled dataset
@@ -646,8 +648,11 @@ def compile_ilamb_datasets(out_dir: str, ilamb_dict: dict) -> xr.Dataset:
         compile_variable(out_var, models, out_dir)
         for out_var, models in var_to_models.items()
     ]
+    
+    ds_out = xr.merge(compiled_data)
+    ds_out['land_area'] = land_area
 
-    return xr.merge(compiled_data)
+    return ds_out
 
 
 def compile_variable(var: str, models: list[str], out_dir: str) -> xr.Dataset:
@@ -665,7 +670,10 @@ def compile_variable(var: str, models: list[str], out_dir: str) -> xr.Dataset:
     for model in models:
         file_name = os.path.join(out_dir, f"{model}_{var.upper()}.nc")
         ds = xr.open_dataset(file_name)
-        processed_ds = get_average_and_iav(ds, var) if var != "biomass" else ds
+        processed_ds = get_average_and_iav(ds, var) if var != "biomass" else ds[var].to_dataset(name='var')
+        processed_ds[f"{var}_cycle"] = ds[f"{var}_cycle"]
+        processed_ds[f"{var}_month_of_max"] = ds[f"{var}_month_of_max"]
+        processed_ds[f"{var}_anomaly"] = ds[f"{var}_anomaly"]
         datasets.append(processed_ds)
 
     var_ds = xr.concat(datasets, dim="model", data_vars="all")
@@ -810,27 +818,3 @@ def filter_df(df: pd.DataFrame, filter_vars: list[str], tol: float) -> pd.DataFr
     df = df.dropna()
 
     return df
-
-
-def get_plotting_dict(config_file: str) -> dict:
-    """Returns a plotting dictionary from a config file path
-
-    Args:
-        config_file (str): path to config file
-
-    Returns:
-        dict: dictionary with information about plotting ILAMB data
-    """
-
-    plotting_dict = config_to_dict(config_file)
-    for _, attributes in plotting_dict.items():
-        attributes["models"] = [
-            model.strip() for model in attributes["models"].split(",")
-        ]
-        if attributes["conversion_factor"] == "None":
-            attributes["conversion_factor"] = None
-        else:
-            try:
-                attributes["conversion_factor"] = float(attributes["conversion_factor"])
-            except ValueError:
-                pass
