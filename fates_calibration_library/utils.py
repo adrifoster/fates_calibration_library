@@ -1,43 +1,32 @@
 """Helper methods
 """
-import configparser
-from dask_jobqueue import PBSCluster
+import yaml
 
-
-def config_to_dict(config_file: str) -> dict:
-    """Convert a config file to a python dictionary
+def get_config_file(file_name: str) -> dict:
+    """Reads in a YAML config file to a dictionary
 
     Args:
-        config_file (str): full path to config file
+        file_name (str): path to config file
 
     Returns:
-        dictionary: dictionary of config file
+        dict: dictionary output
     """
-    config = configparser.ConfigParser()
-    config.read(config_file)
+    
+    with open(file_name, "r") as f:
+        config = yaml.safe_load(f)
+    
+    return config
 
-    dictionary = {}
-    for section in config.sections():
-        dictionary[section] = {}
-        for option in config.options(section):
-            dictionary[section][option] = config.get(section, option)
-
-    return dictionary
-
-def str_to_bool(val: str) -> bool:
-    """Convert a string representation of truth to True or False.
-
-    Args:
-        val (str): input string
-
-    Raises:
-        ValueError: can't figure out what the string should be converted to
-
-    Returns:
-        bool: True or False
-    """
-    if val.lower() in ("y", "yes", "t", "true", "on", "1"):
-        return True
-    if val.lower() in ("n", "no", "f", "false", "off", "0"):
-        return False
-    raise ValueError(f"invalid truth value {val}")
+def evaluate_conversion_factor(factor) -> float:
+    """Evaluates the conversion factor if it's an equation, otherwise returns the number."""
+    if isinstance(factor, dict) and "operation" in factor and "operands" in factor:
+        op = factor["operation"]
+        operands = factor["operands"]
+        if op == "multiply":
+            result = 1
+            for num in operands:
+                result *= num
+            return result
+        elif op == "add":
+            return sum(operands)
+    return factor 

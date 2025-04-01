@@ -1,56 +1,25 @@
 """Functions to assist with global analysis of observations and model outputs"""
 
 import functools
+import glob
 import os
 from datetime import date
 import xarray as xr
 import numpy as np
-import glob
-
-from fates_calibration_library.utils import config_to_dict, str_to_bool
 
 def month_difference(da1: xr.DataArray, da2: xr.DataArray) -> xr.DataArray:
-    """Calculate the minimum cyclic difference between two xarray DataArrays of months."""
+    """Calculate the minimum cyclic difference between two xarray DataArrays of months.
+
+    Args:
+        da1 (xr.DataArray): first data array
+        da2 (xr.DataArray): second data array
+
+    Returns:
+        xr.DataArray: output data array
+    """
+    
     diff = da2 - da1
     return xr.where(diff > 6, diff - 12, xr.where(diff < -6, diff + 12, diff))
-
-def get_conversion_dict(config_file: str) -> dict:
-    """Returns a conversion dictionary from a config file path
-
-    Args:
-        config_file (str): path to config file
-
-    Returns:
-        dict: dictionary with information about plotting ILAMB data
-    """
-
-    conversion_dict = config_to_dict(config_file)
-    for _, attributes in conversion_dict.items():
-        attributes['diverging_cmap'] = str_to_bool(attributes['diverging_cmap'])
-        attributes['cf_time'] = get_conversion_factor(attributes['cf_time'])
-        attributes['cf_area'] = get_conversion_factor(attributes['cf_area'],
-                                                      convert_intrinsic=False)
-            
-    return conversion_dict
-    
-def get_conversion_factor(input_string: str, convert_intrinsic: bool=True) -> float:
-    """Gets a conversion factor for ILAMB data based on an input string
-
-    Args:
-        input_string (str): input string
-
-    Returns:
-        float: conversion factor
-    """
-
-    if input_string == "intrinsic":
-        if convert_intrinsic:
-            return 1 / 365.0
-        else:
-            return 'intrinsic'
-    if input_string == "mrro":
-        return 24 * 60 * 60 / 365.0
-    return float(input_string)
 
 def adjust_lon(ds: xr.Dataset, lon_name: str) -> xr.Dataset:
     """Adjusts the longitude values of a dataset to be from 0-360 to -180 to 180
@@ -80,7 +49,8 @@ def adjust_lon(ds: xr.Dataset, lon_name: str) -> xr.Dataset:
 
     return ds
 
-def get_files(hist_dir: str, hstream='h0') -> list[str]:
+
+def get_files(hist_dir: str, hstream="h0") -> list[str]:
     """Returns all clm history files in a directory given an input hstream
 
     Args:
@@ -92,23 +62,8 @@ def get_files(hist_dir: str, hstream='h0') -> list[str]:
     """
     return sorted(glob.glob(f"{hist_dir}/*clm2.{hstream}*.nc"))
 
-def get_zonal_means(ds, varlist, var_dict, land_area):
-    
-    ds_list = []
-    for var in varlist:
-        if var_dict[var]['cf_area'] == 'intrinsic':
-            cf_area = 1.0
-        else:
-            cf_area = var_dict[var]['cf_area']
-        ds_list.append(
-            get_zonal(ds[var], land_area, cf_area).to_dataset(name=var))
 
-    ds_out = xr.merge(ds_list)
-    
-    return ds_out
-
-
-def get_zonal(
+def calculate_zonal_mean(
     da: xr.DataArray,
     land_area,
     conversion_factor=None,
@@ -128,7 +83,7 @@ def get_zonal(
 
     # compute area-weighted sum
     area_weighted = (da * land_area).sum(dim="lon")
-    
+
     # normalize by land area per latitude
     if conversion_factor is None:
         conversion_factor = 1 / land_area_by_lat
@@ -136,14 +91,37 @@ def get_zonal(
     # convert units
     by_lat = conversion_factor * area_weighted
 
-    return by_lat
+    return by_lat.transpose("model", "lat")
 
-def get_sparse_climatology(ds, var, cf_time, cf_area, biome, land_area):
-    months = ds["time.daysinmonth"]
-    monthly_mean = cf_time*(months*ds[var]).groupby("time.month").mean()
-    monthly_global = area_mean_from_sparse(monthly_mean, biome, 'global', cf_area, land_area)
+
+def get_sparse_climatology(
+    da: xr.DataArray,
+    cf_time: float,
+    cf_area: float,
+    biome: xr.Dataset,
+    land_area: xr.DataArray,
+) -> xr.DataArray:
+    """Calculates mean monthly values for an input dataset and variable for a sparse grid dataset
+
+    Args:
+        da (xr.Dataset): input data array
+        cf_time (float): conversion factor for time averaging
+        cf_area (float): conversion factor for area averaging
+        biome (xr.Dataset): Whittaker biome dataset
+        land_area (xr.DataArray): land area [km2]
+
+    Returns:
+        xr.DataArray: output data array
+    """
+
+    months = da["time.daysinmonth"]
+    monthly_mean = cf_time * (months * da).groupby("time.month").mean()
+    monthly_global = area_mean_from_sparse(
+        monthly_mean, biome, "global", cf_area, land_area
+    )
 
     return monthly_global
+
 
 def get_monthly_max(monthly_mean: xr.DataArray) -> xr.DataArray:
     """Calculates the month of the maximum value of a monthly data array
@@ -166,13 +144,13 @@ def get_monthly_max(monthly_mean: xr.DataArray) -> xr.DataArray:
 
 
 def calculate_annual_mean(
-    data_array: xr.DataArray, conversion_factor, new_units: str = ""
+    data_array: xr.DataArray, conversion_factor: float=None, new_units: str = ""
 ) -> xr.DataArray:
     """Calculates annual mean of an input DataArray, applies a conversion factor if supplied
 
     Args:
         da (xr.DataArray): input DataArray
-        conversion_factor (float): Conversion factor. 
+        conversion_factor (float): Conversion factor.
         new_units (str, optional): new units, defaults to empty
 
     Returns:
@@ -180,6 +158,10 @@ def calculate_annual_mean(
     """
 
     months = data_array["time.daysinmonth"]
+    
+    if conversion_factor is None:
+        conversion_factor = 1 / months.groupby("time.year").sum()
+    
     annual_mean = conversion_factor * (months * data_array).groupby("time.year").sum()
     annual_mean.name = data_array.name
     if new_units != "":
@@ -188,7 +170,7 @@ def calculate_annual_mean(
 
 
 def calculate_monthly_mean(
-    data_array: xr.DataArray, conversion_factor: float
+    data_array: xr.DataArray, conversion_factor: float=None
 ) -> xr.DataArray:
     """Calculates monthly mean of an input DataArray, applies a conversion factor
 
@@ -202,10 +184,12 @@ def calculate_monthly_mean(
 
     months = data_array["time.daysinmonth"]
     
-    monthly_mean = (
-        (conversion_factor * data_array * months).groupby("time.month").sum(dim="time") /
-        months.groupby("time.month").sum(dim="time")
-    )
+    if conversion_factor is None:
+        conversion_factor = 1.0
+
+    monthly_mean = (conversion_factor * data_array * months).groupby("time.month").sum(
+        dim="time"
+    ) / months.groupby("time.month").sum(dim="time")
     monthly_mean.name = data_array.name
     return monthly_mean
 
@@ -223,34 +207,67 @@ def preprocess(data_set: xr.Dataset, data_vars: list[str]) -> xr.Dataset:
     return data_set[data_vars]
 
 
-def post_process_ds(hist_dir: str, data_vars: list[str], whittaker_ds: xr.Dataset, 
-                    start_year: int, end_year: int, filter_nyears: int=None,
-                   fates=True, sparse=True, ensemble=True) -> xr.Dataset:
-    
-    ds = get_clm_ds(get_files(hist_dir), data_vars, start_year, fates=fates,
-                    sparse=sparse, ensemble=ensemble)
+def post_process_ds(
+    hist_dir: str,
+    data_vars: list[str],
+    whittaker_ds: xr.Dataset,
+    years: list[int],
+    run_dict: dict = None,
+) -> xr.Dataset:
+    """Post-processes a CLM dataset
 
+    Args:
+        hist_dir (str): history directory
+        data_vars (list[str]): history variables to read in
+        whittaker_ds (xr.Dataset): Whittaker biome dataset
+        years (list[int]): start and end year of simulation
+        run_dict (dict, optional): Dictionary describing aspects of the run:
+            fates (bool, optional): is it a FATES run? defaults to True.
+            sparse (bool, optional): is it a sparse run? Defaults to True.
+            ensemble (bool, optional): is it an ensemble run? Defaults to False
+            filter_nyears (int, optional): How many years to filter at end of simulation. 
+                Defaults to None.
+
+    Returns:
+        xr.Dataset: output dataset
+    """
+
+    # assign default values if run_dict is None
+    if run_dict is None:
+        run_dict = {}
+    sparse = run_dict.get("sparse", True)
+    filter_nyears = run_dict.get("filter_nyears", None)
+
+    # read in dataset and calculate/convert units on some variables
+    ds = get_clm_ds(
+        get_files(hist_dir),
+        data_vars,
+        years[0],
+        run_dict,
+    )
+
+    # add Whittaker biomes if we are doing a sparse run
     if sparse:
-        ds['biome'] = whittaker_ds.biome
-        ds['biome_name'] = whittaker_ds.biome_name
+        ds["biome"] = whittaker_ds.biome
+        ds["biome_name"] = whittaker_ds.biome_name
 
+    # filter on years
     if filter_nyears is not None:
         years = np.unique(ds.time.dt.year)
         last_n = years[-filter_nyears:]
-        ds = ds.sel(time=slice(f'{last_n[0]}-01-01', f'{last_n[-1]}-12-31'))
-        ds["time"] = xr.cftime_range(str(start_year), periods=len(ds.time), freq="MS")
-        
-    ds = ds.sel(time=slice(f'{start_year}-01-01', f'{end_year}-12-31'))
+        ds = ds.sel(time=slice(f"{last_n[0]}-01-01", f"{last_n[-1]}-12-31"))
+        ds["time"] = xr.cftime_range(str(years[0]), periods=len(ds.time), freq="MS")
+
+    ds = ds.sel(time=slice(f"{years[0]}-01-01", f"{years[1]}-12-31"))
 
     return ds
+
 
 def get_clm_ds(
     files: list[str],
     data_vars: list[str],
     start_year: int,
-    fates: bool = True,
-    sparse: bool = True,
-    ensemble: bool = False,
+    run_dict: dict = None,
 ) -> xr.Dataset:
     """Reads in a CLM dataset and does some initial post-processing
 
@@ -258,14 +275,20 @@ def get_clm_ds(
         files (list[str]): list of files
         data_vars (list[str]): data variables to read in
         start_year (int): start year
-        fates (bool, optional): FATES or CLM. Defaults to True.
-        sparse (bool, optional): sparse or full grid. Defaults to True.
-        ensemble (bool, optional): is the ds part of an ensemble? Defaults to False.
+        run_dict (dict, optional): Dictionary describing aspects of the run:
+            fates (bool, optional): is it a FATES run? defaults to True.
+            sparse (bool, optional): is it a sparse run? Defaults to True.
+            ensemble (bool, optional): is it an ensemble run? Defaults to False
 
     Returns:
         xr.Dataset: output dataset
     """
 
+    # create an empty dictionary if not supplied
+    if run_dict is None:
+        run_dict = {}
+
+    # read in dataset
     ds = xr.open_mfdataset(
         files,
         combine="nested",
@@ -275,9 +298,10 @@ def get_clm_ds(
         autoclose=True,
     )
 
+    # update time
     ds["time"] = xr.cftime_range(str(start_year), periods=len(ds.time), freq="MS")
 
-    if fates:
+    if run_dict.get("fates", True):
         ds["GPP"] = ds["FATES_GPP"] * ds["FATES_FRACTION"]  # kg m-2 s-1
         ds["GPP"].attrs["units"] = ds["FATES_GPP"].attrs["units"]
         ds["GPP"].attrs["long_name"] = ds["FATES_GPP"].attrs["long_name"]
@@ -325,13 +349,13 @@ def get_clm_ds(
     ds["Temp"].attrs["units"] = "degrees C"
     ds["Temp"].attrs["long_name"] = ds["TSA"].attrs["long_name"]
 
-    if sparse:
+    if run_dict.get("sparse", True):
         ds0 = xr.open_dataset(files[0])
         extras = ["grid1d_lat", "grid1d_lon"]
         for extra in extras:
             ds[extra] = ds0[extra]
 
-    if ensemble:
+    if run_dict.get("enemble", False):
         ds["ensemble"] = os.path.basename(files[0]).split("_")[-1]
 
     ds.attrs["Date"] = str(date.today())
@@ -376,17 +400,15 @@ def area_mean_from_sparse(
         grid = area_weighted.biome
 
     # calculate area mean
-    area_mean = cf * area_weighted.groupby(grid).sum()
+    weighted_mean = cf * area_weighted.groupby(grid).sum()
 
     if domain == "global":
-        area_mean = area_mean.mean(dim="biome")  # get rid of gridcell dimension
+        weighted_mean = weighted_mean.mean(dim="biome")  # get rid of gridcell dimension
 
-    return area_mean
+    return weighted_mean
 
 
-def area_mean(
-    da: xr.DataArray, cf, land_area: xr.DataArray
-) -> xr.DataArray:
+def area_mean(da: xr.DataArray, cf, land_area: xr.DataArray) -> xr.DataArray:
     """Calculates a global area-weighted mean of a global dataset
 
     Args:
@@ -400,16 +422,15 @@ def area_mean(
 
     # update conversion factor if need be
     if cf == "intrinsic":
-        cf = 1 / land_area.sum(dim=['lat', 'lon']).values
+        cf = 1 / land_area.sum(dim=["lat", "lon"]).values
 
     # weight by landarea
     area_weighted = land_area * da
 
     # calculate area mean
-    area_mean = cf * area_weighted.sum(dim=['lat', 'lon'])
+    weighted_mean = cf * area_weighted.sum(dim=["lat", "lon"])
 
-    return area_mean
-
+    return weighted_mean
 
 
 def global_from_sparse(
@@ -462,6 +483,63 @@ def global_from_sparse(
     return out_map
 
 
+def create_target_grid(file: str, var: str) -> xr.Dataset:
+    """Creates a target grid to resample to
+
+    Args:
+        file (str): path to dataset to regrid to
+        var (str): variable to create the grid off of
+
+    Returns:
+        xr.Dataset: output dataset
+    """
+
+    ds = xr.open_dataset(file)
+    target_grid = ds[var].mean(dim="time")
+    target_grid["area"] = ds["area"].fillna(0)
+    target_grid["landmask"] = ds["landmask"].fillna(0)
+    target_grid["landfrac"] = ds["landfrac"].fillna(0)
+    target_grid["land_area"] = target_grid.area * target_grid.landfrac
+    target_grid["land_area"] = target_grid["land_area"].where(
+        target_grid.lat > -60.0, 0.0
+    )
+
+    return target_grid
+
+def apply_to_vars(ds: xr.Dataset, varlist: list[str], func, *args, **kwargs) -> xr.Dataset:
+    """Applies a function to each variable in varlist and merges results.
+
+    Args:
+        ds (xr.Dataset): Input dataset.
+        varlist (list[str]): List of variables to process.
+        func (callable): Function to apply to each variable.
+        *args: Additional positional arguments for the function.
+        **kwargs: Additional keyword arguments for the function.
+
+    Returns:
+        xr.Dataset: Merged dataset with processed variables.
+    """
+    ds_list = [func(ds[var], *args, **kwargs).to_dataset(name=var) for var in varlist]
+    return xr.merge(ds_list)
+
+def get_zonal_means(
+    ds: xr.Dataset, varlist: list[str], var_dict: dict, land_area: xr.DataArray
+) -> xr.Dataset:
+    """Calculates zonal weighted area means (by latitude) for a range of input variables
+
+    Args:
+        ds (xr.Dataset): input dataset
+        varlist (list[str]): list of variables to compute
+        var_dict (dict): dictionary with information about the variables
+        land_area (xr.DataArray): land area [km2]
+
+    Returns:
+        xr.Dataset: output dataset
+    """
+    cf_area_dict = {var: var_dict[var]["cf_area"] if var_dict[var]["cf_area"] is not None else 1.0 for var in varlist}
+
+    return apply_to_vars(ds, varlist, calculate_zonal_mean, land_area, cf_area_dict)
+
 def get_sparse_maps(
     ds: xr.Dataset, sparse_grid: xr.Dataset, varlist: list[str]
 ) -> xr.Dataset:
@@ -486,29 +564,8 @@ def get_sparse_maps(
     return xr.merge(ds_list)
 
 
-def create_target_grid(file: str, var: str) -> xr.Dataset:
-    """Creates a target grid to resample to
 
-    Args:
-        file (str): path to dataset to regrid to
-        var (str): variable to create the grid off of
-
-    Returns:
-        xr.Dataset: output dataset
-    """
-
-    ds = xr.open_dataset(file)
-    target_grid = ds[var].mean(dim="time")
-    target_grid['area'] = ds['area'].fillna(0)
-    target_grid["landmask"] = ds["landmask"].fillna(0)
-    target_grid["landfrac"] = ds["landfrac"].fillna(0)
-    target_grid['land_area'] = target_grid.area*target_grid.landfrac
-    target_grid['land_area'] = target_grid['land_area'].where(target_grid.lat > -60.0, 0.0)
-
-    return target_grid
-
-
-def get_annual_means(ds, varlist, var_dict, sparse=False):
+def get_annual_means(ds: xr.Dataset, varlist: list[str], var_dict: dict, sparse: bool=False):
     ds_list = []
     for var in varlist:
         ds_list.append(
@@ -524,17 +581,15 @@ def get_annual_means(ds, varlist, var_dict, sparse=False):
 
     return ds_out
 
+
 def get_monthly_means(ds, varlist, var_dict, sparse=False):
     ds_list = []
     for var in varlist:
-        if var_dict[var]['cf_time'] == 1/365:
+        if var_dict[var]["cf_time"] == 1 / 365:
             cf_time = 1.0
         else:
-            cf_time = var_dict[var]['cf_time']
-        ds_list.append(
-            calculate_monthly_mean(
-                ds[var], cf_time).to_dataset(name=var)
-        )
+            cf_time = var_dict[var]["cf_time"]
+        ds_list.append(calculate_monthly_mean(ds[var], cf_time).to_dataset(name=var))
 
     ds_out = xr.merge(ds_list)
     if sparse:
@@ -543,24 +598,24 @@ def get_monthly_means(ds, varlist, var_dict, sparse=False):
 
     return ds_out
 
+
 def get_area_means(ds, varlist, var_dict, land_area):
     ds_list = []
     for var in varlist:
         ds_list.append(
-            area_mean(
-                ds[var], var_dict[var]["cf_area"], land_area
-            ).to_dataset(name=var)
+            area_mean(ds[var], var_dict[var]["cf_area"], land_area).to_dataset(name=var)
         )
 
     return xr.merge(ds_list)
 
+
 def get_month_of_maxes(ds, varlist, sparse=False):
     ds_list = []
     for var in varlist:
-        ds_list.append(ds[var].idxmax(dim='month').to_dataset(name=var))
+        ds_list.append(ds[var].idxmax(dim="month").to_dataset(name=var))
 
     ds_out = xr.merge(ds_list)
-    
+
     if sparse:
         ds_out["grid1d_lat"] = ds.grid1d_lat
         ds_out["grid1d_lon"] = ds.grid1d_lon

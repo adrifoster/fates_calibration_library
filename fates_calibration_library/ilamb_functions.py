@@ -8,14 +8,12 @@ import numpy as np
 import pandas as pd
 import xesmf as xe
 
-
 from fates_calibration_library.analysis_functions import (
     calculate_monthly_mean,
     calculate_annual_mean,
     get_monthly_max,
-    get_conversion_factor,
 )
-from fates_calibration_library.utils import config_to_dict, str_to_bool
+from fates_calibration_library.utils import evaluate_conversion_factor
 
 def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
     """Processes ILAMB datasets: reads, converts to annual values, regrids, and saves.
@@ -41,8 +39,7 @@ def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Data
         # skip if file exists and clobber is False
         if os.path.isfile(out_file) and not config_dict["clobber"]:
             print(f"File {out_file} for {dataset} exists, skipping")
-            return
-        print(out_file)
+            continue
 
         ds_out = process_dataset(config_dict, ilamb_dict, attributes, target_grid)
         ds_out.to_netcdf(out_file, mode="w")
@@ -82,22 +79,22 @@ def process_dataset(
         ilamb_dat,
         attributes["in_var"],
         attributes["out_var"],
-        get_conversion_factor(attributes["conversion_factor"]),
+        evaluate_conversion_factor(attributes["time_conversion_factor"]),
         metadata,
     )
 
     # regrid annual
     regridded_annual = regrid_ilamb_ds(annual_ds, target_grid, attributes["out_var"])
+    if "year" in regridded_annual[attributes['out_var']].dims:
+        sum_annual = regridded_annual[attributes['out_var']].sum(dim="year")
+    else:
+        sum_annual = regridded_annual[attributes['out_var']] 
+    regridded_annual = regridded_annual.where(np.abs(sum_annual) > 0.0)
 
     # monthly mean
-    if attributes["conversion_factor"] in ['intrinsic', 'mrro']:
-        conversion_factor = 1.0
-    else:
-        conversion_factor = float(attributes["conversion_factor"])
-        
     monthly_mean = calculate_monthly_mean(
         ilamb_dat[attributes["in_var"]],
-        conversion_factor,
+        evaluate_conversion_factor(attributes["time_conversion_factor"]),
     )
         
     # regrided monthly mean
@@ -119,8 +116,7 @@ def process_dataset(
     climatology_ds = get_ilamb_climatology(
         regridded_monthly,
         attributes['out_var'],
-        get_conversion_factor(attributes["area_conversion_factor"],
-                                      convert_intrinsic=False)
+        evaluate_conversion_factor(attributes["area_conversion_factor"])
     )
 
     # return all files combined
@@ -146,7 +142,7 @@ def get_ilamb_climatology(
     land_area = monthly_mean.land_area
     land_area = xr.where(np.abs(sum_monthly) > 0.0, land_area, 0.0)
     
-    if area_cf == 'intrinsic':
+    if area_cf is None:
         area_cf = 1 / land_area.sum(dim=['lat', 'lon']).values
 
     # weight by landarea
@@ -204,10 +200,10 @@ def read_ilamb_data(
 
     # create the filter_options dictionary
     filter_options = {
-        "tstart": config.get("start_date"),
-        "tstop": config.get("end_date"),
-        "max_val": get_filter_values(attributes.get("max_val")),
-        "min_val": get_filter_values(attributes.get("min_val")),
+        "tstart": config.get("start_date", None),
+        "tstop": config.get("end_date", None),
+        "max_val": attributes.get("max_val", None),
+        "min_val": attributes.get("min_val", None),
     }
 
     if attributes["out_var"] == "ef":
@@ -266,21 +262,6 @@ def read_ilamb_data(
         )
 
     return ilamb_dat, original_file
-
-def get_filter_values(input_string: str) -> float:
-    """Return values to filter to based on an input string
-
-    Args:
-        input_string (str): input string
-
-    Returns:
-        float: value to filter to
-    """
-
-    if input_string != "None":
-        return float(input_string)
-    return None
-
 
 def get_ilamb_ds(
     file_info: Dict[str, str], in_var: str, filter_options: Dict[str, Optional[float]]
@@ -478,8 +459,8 @@ def albedo(
     Returns:
         xr.DataArray: albedo [0-1]
     """
-    rsds = rsds.where(rsds > energy_threshold)
-    rsus = rsus.where(rsus > energy_threshold)
+    rsds = rsds.where(rsds >= energy_threshold)
+    rsus = rsus.where(rsds >= energy_threshold)
     alb = rsus / rsds
 
     return alb
@@ -569,7 +550,7 @@ def regrid_ilamb_ds(
     ds: xr.Dataset,
     target_grid: xr.Dataset,
     var: str,
-    method: str = "bilinear",
+    method: str = "conservative",
 ) -> xr.Dataset:
     """Regrids an ILAMB dataset based on an input target grid
 
@@ -809,27 +790,3 @@ def filter_df(df: pd.DataFrame, filter_vars: list[str], tol: float) -> pd.DataFr
     df = df.dropna()
 
     return df
-
-def get_conf_dict(config_file: str) -> dict:
-    """Returns a conversion dictionary from a config file path
-
-    Args:
-        config_file (str): path to config file
-
-    Returns:
-        dict: dictionary with information about plotting ILAMB data
-    """
-
-    conversion_dict = config_to_dict(config_file)
-    for _, attributes in conversion_dict.items():
-        attributes["models"] = [
-            model.strip() for model in attributes["models"].split(",")
-        ]
-        if attributes["conversion_factor"] == "None":
-            attributes["conversion_factor"] = None
-        else:
-            attributes["conversion_factor"] = float(attributes["conversion_factor"])
-        attributes['diverging_cmap'] = str_to_bool(attributes['diverging_cmap'])
-            
-    return conversion_dict
-

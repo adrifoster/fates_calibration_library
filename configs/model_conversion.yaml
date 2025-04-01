@@ -1,0 +1,112 @@
+ASA:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: 0-1
+  global_units: 0-1
+  cmap: jet
+  diverging_cmap: False 
+
+GPP:
+  time_conversion_factor: 86400
+  area_conversion_factor: 1.0e-6
+  annual_units: kgC m$^{-2}$ yr$^{-1}$
+  global_units: PgC yr$^{-1}$
+  cmap: YlGn
+  diverging_cmap: False
+
+LAI:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: m$^2$ m$^{-2}$
+  global_units: m$^2$ m$^{-2}$
+  cmap: YlGn
+  diverging_cmap: False 
+
+EFLX_LH_TOT:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: YlGnBu
+  diverging_cmap: False 
+
+FSH:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+EF:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: BrBG
+  diverging_cmap: False 
+
+SOILWATER_10CM:
+  time_conversion_factor: null
+  area_conversion_factor: 1.0e-6
+  annual_units: kgH$_2$O m$^{-2}$
+  global_units: TtH$_2$O yr$^{-1}$
+  cmap: Blues
+  diverging_cmap: False 
+
+FSR:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+FSA:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+FIRE:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+RLNS:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+RN:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+TV:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+BTRANMN:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: BrBG
+  diverging_cmap: False 
+

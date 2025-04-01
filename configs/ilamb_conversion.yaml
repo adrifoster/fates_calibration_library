@@ -1,0 +1,194 @@
+ASA:
+  models: [CERESed4.1, GEWEX.SRB]
+  var: albedo
+  long_name: albedo
+  convert_units: null
+  conversion_factor: null 
+  global_units: 0-1
+  lat_units: 0-1
+  cmap: jet 
+  diverging_cmap: False 
+
+GPP:
+  models: [FLUXCOM, WECANN, GBAF]
+  var: gpp
+  long_name: GPP
+  convert_units: PgC yr-1
+  conversion_factor: 1.0E-06
+  global_units: kgC m$^{-2}$ yr$^{-1}$
+  lat_units: PgC yr$^{-1}$
+  cmap: YlGn
+  diverging_cmap: False
+
+NEE:
+  models: [FLUXCOM]
+  var: nee
+  long_name: net ecosystem exchange
+  convert_units: PgC yr-1
+  conversion_factor: 1.0E-06
+  global_units: kgC m$^{-2}$ yr$^{-1}$
+  lat_units: kgC m$^{-2}$ yr$^{-1}$
+  cmap: RdYlGn_r
+  diverging_cmap: True 
+
+
+LAI:
+  models: [AVHRR, AVH15C1]
+  var: lai
+  long_name: leaf area index
+  convert_units: null
+  conversion_factor: null
+  global_units: m$^2$ m$^{-2}$
+  lat_units: m$^2$ m$^{-2}$
+  cmap: YlGn
+  diverging_cmap: False
+
+EFLX_LH_TOT:
+  models: [FLUXCOM, DOLCE, CLASS, WECANN, GBAF]
+  var: le
+  long_name: latent heat flux
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: YlGnBu
+  diverging_cmap: False
+
+FSH:
+  models: [FLUXCOM, CLASS, WECANN, GBAF]
+  var: sh
+  long_name: sensible heat flux
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False
+
+EF:
+  models: [FLUXCOM, CLASS, WECANN, GBAF]
+  var: ef
+  long_name: evaporative fraction
+  convert_units: null
+  conversion_factor: null
+  global_units: 0-1
+  lat_units: 0-1
+  cmap: BrBG
+  diverging_cmap: False
+
+SW:
+  models: [WangMao]
+  var: sw
+  long_name: soil water
+  convert_units: null
+  conversion_factor: null
+  global_units: kg m$^{-2}$
+  lat_units: kg m$^{-2}$
+  cmap: Blues
+  diverging_cmap: False 
+
+FSR:
+  models: [CERESed4.1, GEWEX.SRB]
+  var: fsr
+  long_name: surface upward shortwave radiation flux
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+FSA:
+  models: [CERESed4.1, GEWEX.SRB]
+  var: fsa
+  long_name: surface net shortwave radiation flux
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False
+
+FIRE:
+  models: [CERESed4.1, GEWEX.SRB]
+  var: fire
+  long_name: surface upward longwave radiation flux
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False
+
+RLNS:
+  models: [CERESed4.1, GEWEX.SRB]
+  var: rlns
+  long_name: surface net longwave radiation flux
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False
+
+RN:
+  models: [CERESed4.1, GEWEX.SRB]
+  var: rn
+  long_name: net radiation
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False 
+
+BIOMASS:
+  models: [ESACCI, GEOCARBON]
+  var: biomass
+  long_name: forest biomass
+  convert_units: Tg
+  conversion_factor: 1.0E-08 
+  global_units: MgC ha$^{-1}$
+  lat_units: TgC
+  cmap: YlGn 
+  diverging_cmap: False 
+
+BURNTAREA:
+  models: [GFED4.1S]
+  var: burntarea
+  long_name: burned area
+  convert_units: null
+  conversion_factor: null
+  global_units: percent
+  lat_units: percent
+  cmap: Reds 
+  diverging_cmap: False 
+
+GR:
+  models: [CLASS]
+  var: gr
+  long_name: ground heat flux
+  convert_units: null
+  conversion_factor: 1.0E-06
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: Oranges
+  diverging_cmap: False
+
+
+MRRO:
+  models: [LORA, CLASS]
+  var: mrro
+  long_name: runoff
+  convert_units: null
+  conversion_factor: null
+  global_units: mm day$^{-1}$
+  lat_units: mm day$^{-1}$
+  cmap: Blues
+  diverging_cmap: False
+
+
+
+
+
+
