@@ -9,6 +9,20 @@ import cartopy.feature as cfeature
 from cartopy.mpl.geocollection import GeoQuadMesh
 import seaborn as sns
 
+from fates_calibration_library.analysis_functions import month_difference
+
+_COLS = [
+    "#e60049",
+    "#0bb4ff",
+    "#50e991",
+    "#e6d800",
+    "#9b19f5",
+    "#ffa300",
+    "#dc0ab4",
+    "#b3d4ff",
+    "#00bfa0",
+    ]
+
 
 def choose_subplot_dimensions(num_plots: int) -> tuple[int, int]:
     """Chooses a nice array size/dimension for plotting subplots based on the total
@@ -28,7 +42,79 @@ def choose_subplot_dimensions(num_plots: int) -> tuple[int, int]:
     else:
         # I've chosen to have a maximum of 3 columns
         return math.ceil(num_plots / 3), 3
+    
+def plot_model_obs_diff(model_ds, obs_da, land_frac, var, units, model_name):
 
+    sub_list = []
+    for model in obs_da.model:
+        sub = obs_da.sel(model=model)
+        sub = sub.where(np.abs(sub > 0.0))
+        sub_list.append(sub)
+
+    obs_da = xr.concat(sub_list, dim='model')
+
+    mean_diff = model_ds[var]*land_frac - obs_da.mean(dim='model')
+    vmax = mean_diff.max().values
+    vmin = mean_diff.min().values
+    
+    models = obs_da.model.values
+    figure, axes = generate_subplots(len(models)+1)
+    axes = axes.flatten(order="F")
+    for idx, ax in enumerate(axes):
+        if idx < len(models):
+            obs_model = obs_da.sel(model=models[idx])
+            diff = model_ds[var]*land_frac - obs_model
+            title = f"{model_name} - {models[idx]}"
+        else:
+            diff = mean_diff
+            title = f"{model_name} - {len(models)}-model average"
+        
+        pcm = map_function(ax, diff, title, 'RdBu_r', vmin, vmax, diverging_cmap=True)
+    cbar = figure.colorbar(pcm, ax=axes.ravel().tolist(), shrink=0.5, orientation="horizontal")
+    cbar.set_label(f"{var} Difference ({units})", size=10, fontweight="bold")
+    
+def plot_zonal(da: xr.DataArray, xlabel: str, units: str, title: str):
+    """Plot a zonal mean of a variable
+
+    Args:
+        da (xr.DataArray): data array
+        var (str): variable name
+        ylabel (str): label for y axis
+        units (str): units for y axis
+        title (str): title for plot
+    """
+    
+    get_blank_plot()
+    
+    minval = da.min()
+    minvar = minval
+    maxvar = da.max()
+    
+    # add latitude-specific ticks/lines
+    plt.xlim(minvar - 0.01, maxvar + 0.01)
+    plt.ylim(-90, 90)
+    
+    plt.yticks(
+        range(-90, 91, 15), [str(x) + "º" for x in range(-90, 91, 15)], fontsize=10
+    )
+    plt.xticks(fontsize=10)
+    
+    for lat in range(-90, 91, 15):
+        plt.plot(
+            range(math.floor(minvar), math.ceil(maxvar) + 1),
+            [lat] * len(range(math.floor(minvar), math.ceil(maxvar) + 1)),
+            "--",
+            lw=0.5,
+            color="black",
+            alpha=0.3,
+        )
+    
+    plt.tick_params(bottom=False, top=False, left=False, right=False)
+    plt.plot(da.values, da.lat.values, lw=2)
+    
+    plt.ylabel("Latitude (º)", fontsize=11)
+    plt.xlabel(f"{xlabel} ({units})", fontsize=11)
+    plt.title({title})
 
 def generate_subplots(
     num_plots: int, row_wise: bool = False
@@ -75,8 +161,8 @@ def map_function(
     dat: xr.DataArray,
     title: str,
     cmap: str,
-    vmax: float,
     vmin: float,
+    vmax: float,
     diverging_cmap: bool = False,
 ) -> GeoQuadMesh:
     """Plots a color mesh along with coastlines and ocean for a global data array
@@ -160,6 +246,60 @@ def round_down(number: float, decimals: int = 0) -> float:
     multiplier = 10**decimals
     return int(number * multiplier) / multiplier
 
+def plot_two_model_diff(da1, da2, ds1_name, ds2_name, fates_var, units, cmap):
+
+    vmin = np.min([da1.min().values, da2.min().values])
+    vmax = np.max([da1.max().values, da2.max().values])
+    
+    figure, axes = generate_subplots(3)
+    axes = axes.flatten(order="F")
+    for idx, ax in enumerate(axes):
+        if idx == 0:
+            pcm = map_function(ax, da2, ds2_name, cmap, vmin, vmax,
+                                        diverging_cmap=False)
+        elif idx == 2:
+            pcm = map_function(ax, da1, ds1_name, cmap, vmin, vmax,
+                                        diverging_cmap=False)
+        elif idx == 1:
+            diff = da2 - da1
+            pcmdiff = map_function(ax, diff, f'{ds2_name} - {ds1_name}', 'RdBu_r',
+                                            diff.min().values, diff.min().values,
+                                            diverging_cmap=True)
+    cbar1 = figure.colorbar(pcm, ax=axes[2], shrink=1, orientation="vertical")
+    cbar1.set_label(f"{fates_var} ({units})", size=10, fontweight="bold")
+    
+    cbar2 = figure.colorbar(pcmdiff, ax=axes[1], shrink=1, orientation="horizontal")
+    cbar2.set_label(f"{fates_var} Difference ({units})", size=10, fontweight="bold")
+    
+    figure.suptitle(f'Comparison for {fates_var}')
+    
+def plot_month_of_max_diff(da1, da2, ds1_name, ds2_name, fates_var):
+
+    figure, axes = generate_subplots(3)
+    axes = axes.flatten(order="F")
+    for idx, ax in enumerate(axes):
+        if idx == 0:
+            pcm = map_function(ax, da2, ds2_name, 'jet', 0.5, 12.5,
+                                        diverging_cmap=False)
+        elif idx == 2:
+            pcm = map_function(ax, da1, ds1_name, 'jet', 0.5, 12.5,
+                                        diverging_cmap=False)
+        elif idx == 1:
+            diff = month_difference(da1, da2)
+            pcmdiff = map_function(ax, diff, f'{ds2_name} - {ds1_name}', 'PRGn',
+                                            -5, 5,
+                                            diverging_cmap=True)
+    cbar1 = figure.colorbar(pcm, ax=axes[2], shrink=1, orientation="vertical")
+    cbar1.set_label('Month', size=12, fontweight='bold')
+    cbar1.set_ticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    cbar1.set_ticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
+                     'Sep', 'Oct', 'Nov', 'Dec'])
+    
+    cbar2 = figure.colorbar(pcmdiff, ax=axes[1], shrink=1, orientation="horizontal")
+    cbar2.set_label("Difference in Month of Max", size=10, fontweight="bold")
+    
+    figure.suptitle(f'Comparison for Month of Max for {fates_var}')
+
 
 def plot_pft_grid(colors, names, obs_data, obs_df):
 
@@ -194,6 +334,103 @@ def plot_pft_grid(colors, names, obs_data, obs_df):
     cbar.set_ticks([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     cbar.set_ticklabels(names)
     ax.set_extent([-50, 180, -10, 10])
+
+
+def plot_heatmap(summary_df):
+    """Plot a heatmap of dataset means and relative differences."""
+    # create a mask: Keep only 'Relative Difference (%)' for coloring
+    mask = summary_df.copy()
+    mask.loc[:, mask.columns != "Relative Difference (%)"] = np.nan 
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    sns.heatmap(mask, annot=True, fmt=".2f", 
+                cmap="coolwarm", center=0, linewidths=0.5, linecolor="gray",
+                ax=ax, cbar_kws={"label": "Relative Difference (%)"})
+
+    # mannually add text for the other columns (to keep them uncolored)
+    for i in range(summary_df.shape[0]):
+        for j in range(summary_df.shape[1]):
+            if summary_df.columns[j] != "Relative Difference (%)":
+                text = f"{summary_df.iloc[i, j]:.2f}" if not np.isnan(summary_df.iloc[i, j]) else ""
+                ax.text(j + 0.5, i + 0.5, text, ha='center', va='center', fontsize=10, color="black")
+
+    plt.title("Dataset Means and Differences")
+    plt.yticks(rotation=0)
+    
+def summarize_differences(ds1, ds2, ds1_name, ds2_name, var_dict):
+    """Summarize global differences between two xarray datasets, handling Dask arrays and adding units."""
+    
+    summary = []
+    for var in ds1.data_vars:
+        if var in ds2:
+            
+            unit = var_dict[var]['global_units']  
+            unit_str = f" ({unit})" if unit else "" 
+            mean1 = ds1[var].values  
+            mean2 = ds2[var].values
+            diff = mean2 - mean1
+            rel_diff = (diff / mean1 * 100) if mean1 != 0 else None
+
+            # Append data with unit in the variable name
+            summary.append([f"{var}{unit_str}", f"Mean of {ds1_name}", mean1.item()])
+            summary.append([f"{var}{unit_str}", f"Mean of {ds2_name}", mean2.item()])
+            summary.append([f"{var}{unit_str}", "Absolute Difference", diff.item() if diff is not None else None])
+            summary.append([f"{var}{unit_str}", "Relative Difference (%)", rel_diff.item() if rel_diff is not None else None])
+
+    # convert list to DataFrame
+    summary_df = pd.DataFrame(summary, columns=["Variable", "Statistic", "Value"])
+    summary_df = summary_df.pivot(index="Variable", columns="Statistic", values="Value")
+
+    # reorder columns
+    desired_order = [f"Mean of {ds1_name}", f"Mean of {ds2_name}", "Absolute Difference", "Relative Difference (%)"]
+    summary_df = summary_df[desired_order]
+
+    return summary_df
+    
+def plot_annual_cycle_diff(da1: xr.DataArray, da2: xr.DataArray, ds1_name: str, 
+                           ds2_name: str, var: str, ylabel: str, units: str):
+    """Plot an annual cycle of a variable
+
+    Args:
+        da1 (xr.DataArray): data array for dataset 1
+        da2 (xr.DataArray): data array for dataset 2
+        var (str): variable name
+        ds1_name (str): name of first dataset
+        ds2_name (str): name of second dataset
+        ylabel (str): label for y axis
+        units (str): units for y axis
+    """
+
+    # merge together
+    ds = xr.concat([da1.to_dataset(name=var), da2.to_dataset(name=var)], dim='version')
+    ds = ds.assign_coords(version=("version", [ds1_name, ds2_name]))
+    
+    df = pd.DataFrame({
+        "month": np.tile(ds.month, len(ds.version)),
+        "version": np.repeat(ds.version, len(ds.month)),
+        var: ds[var].values.flatten()}
+    )
+    
+    # plot
+    get_blank_plot()
+    plt.xlim(1, 12)
+    plt.xticks(range(1, 13, 1), ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 
+                                 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], fontsize=10)
+    
+    # add gridlines
+    plt.grid(True, which='both', axis='y', linestyle='--', linewidth=0.5, color='black', alpha=0.3)
+    plt.tick_params(bottom=False, top=False, left=False, right=False)
+    
+    # plot models
+    for rank, version in enumerate(np.unique(df.version.values)):
+        data = df[df.version == version]
+        plt.plot(data.month.values, data[var].values, lw=2, color=_COLS[rank], label=version)
+
+    plt.xlabel("Month", fontsize=11)
+    plt.ylabel(f"{ylabel} ({units})", fontsize=11)
+    plt.legend(loc="upper right")
+    plt.title("Climatology Difference")
 
 
 def plot_rel_sd_var(obs_ds, obs_var, name, points, pft="all"):

@@ -13,8 +13,9 @@ from fates_calibration_library.analysis_functions import (
     calculate_monthly_mean,
     calculate_annual_mean,
     get_monthly_max,
+    get_conversion_factor,
 )
-
+from fates_calibration_library.utils import config_to_dict, str_to_bool
 
 def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
     """Processes ILAMB datasets: reads, converts to annual values, regrids, and saves.
@@ -41,6 +42,7 @@ def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Data
         if os.path.isfile(out_file) and not config_dict["clobber"]:
             print(f"File {out_file} for {dataset} exists, skipping")
             return
+        print(out_file)
 
         ds_out = process_dataset(config_dict, ilamb_dict, attributes, target_grid)
         ds_out.to_netcdf(out_file, mode="w")
@@ -64,7 +66,7 @@ def process_dataset(
 
     # read or compute ILAMB data
     ilamb_dat, original_file = read_ilamb_data(
-        config_dict["top_dir"], ilamb_dict, attributes, config_dict
+        config_dict, ilamb_dict, attributes
     )
 
     # prepare metadata
@@ -88,64 +90,70 @@ def process_dataset(
     regridded_annual = regrid_ilamb_ds(annual_ds, target_grid, attributes["out_var"])
 
     # monthly mean
+    if attributes["conversion_factor"] in ['intrinsic', 'mrro']:
+        conversion_factor = 1.0
+    else:
+        conversion_factor = float(attributes["conversion_factor"])
+        
     monthly_mean = calculate_monthly_mean(
         ilamb_dat[attributes["in_var"]],
-        get_conversion_factor(attributes["conversion_factor"]),
+        conversion_factor,
     )
+        
+    # regrided monthly mean
+    regridded_monthly = regrid_ilamb_ds(
+        monthly_mean.to_dataset(name=f"{attributes['out_var']}_monthly"),
+        target_grid,
+        f"{attributes['out_var']}_monthly")
+    
+    sum_monthly = regridded_monthly[f"{attributes['out_var']}_monthly"].sum(dim='month')
+    regridded_monthly = regridded_monthly.where(np.abs(sum_monthly) > 0.0)
+        
 
     # calculate month of maximum value
-    month_of_max = get_monthly_max(monthly_mean).to_dataset(
+    month_of_max = get_monthly_max(regridded_monthly[f"{attributes['out_var']}_monthly"]).to_dataset(
         name=f"{attributes['out_var']}_month_of_max"
-    )
-
-    # regrid month of max
-    regridded_monthly = regrid_ilamb_ds(
-        month_of_max,
-        target_grid,
-        f"{attributes['out_var']}_month_of_max",
-        method="nearest_s2d",
     )
 
     # get climatology
     climatology_ds = get_ilamb_climatology(
-        monthly_mean,
+        regridded_monthly,
         attributes['out_var'],
-        area_cf=get_conversion_factor(attributes["area_conversion_factor"]),
+        get_conversion_factor(attributes["area_conversion_factor"],
+                                      convert_intrinsic=False)
     )
 
     # return all files combined
-    return xr.merge([regridded_monthly, regridded_annual, climatology_ds])
+    return xr.merge([month_of_max, regridded_annual, climatology_ds])
 
 
 def get_ilamb_climatology(
-    monthly_mean: xr.DataArray, out_var: str, area_cf: float = None
-) -> xr.Dataset:
+    monthly_mean: xr.DataArray, out_var: str, area_cf) -> xr.Dataset:
     """Returns dataset of climatology of the monthly input data
 
     Args:
         monthly_mean (xr.DataArray): monthly mean values
         out_var (str): name of output variable
-        area_cf (float, optional): area conversion factor. Defaults to None.
+        area_cf (float): area conversion factor
 
     Returns:
         xr.Dataset: climatology dataset
     """
+    
+    # sum up to get areas where there is no data
+    sum_monthly = monthly_mean[f"{out_var}_monthly"].sum(dim='month')
+    
+    land_area = monthly_mean.land_area
+    land_area = xr.where(np.abs(sum_monthly) > 0.0, land_area, 0.0)
+    
+    if area_cf == 'intrinsic':
+        area_cf = 1 / land_area.sum(dim=['lat', 'lon']).values
 
-    # calculate cell areas
-    lons = monthly_mean.lon.values
-    lats = np.array(sorted(monthly_mean.lat.values))
-    areas = cell_areas(lats, lons)
-    land_area = xr.DataArray(areas, coords={"lat": lats, "lon": lons})
-    land_area = land_area * 1e-6
+    # weight by landarea
+    area_weighted = land_area * monthly_mean[f"{out_var}_monthly"]
 
-    if area_cf is not None:
-        climatology = (
-            (monthly_mean * land_area * area_cf)
-            .sum(dim=["lat", "lon"])
-            .to_dataset(name=f"{out_var}_cycle")
-        )
-    else:
-        climatology = monthly_mean.mean(dim=["lat", "lon"])
+    # calculate area mean
+    climatology = area_cf * area_weighted.sum(dim=['lat', 'lon']).to_dataset(name=f"{out_var}_cycle")
 
     # calculate anomaly
     climatology_mean = climatology[f"{out_var}_cycle"].mean(dim="month")
@@ -179,16 +187,16 @@ def build_file_paths(top_dir, sub_dirs, model, filenames):
 
 
 def read_ilamb_data(
-    top_dir: str, ilamb_dict: dict, attributes: dict, config: dict
+    config: dict, ilamb_dict: dict, attributes: dict, 
 ) -> tuple[xr.Dataset, str]:
     """Handles reading or computing different types of ILAMB datasets
 
     Args:
-        top_dir (str): top ILAMB directory
+        config (dict): Configuration containing top_dir, clobber, out_dir,
+            start_date, end_date.
         ilamb_dict (dict): Dictionary with ILAMB dataset information.
         attributes (dict): dictionary with attributes about this ILAMB dataset
-        config (dict): Configuration containing top_dir, clobber, out_dir,
-        start_date, end_date.
+
 
     Returns:
         tuple[xr.Dataset, str]: output dataset and string for original file
@@ -208,14 +216,14 @@ def read_ilamb_data(
             ilamb_dict[f"{attributes['model']}_SH"],
         )
         ilamb_dat = get_ef_ds(
-            top_dir,
+            config['top_dir'],
             attributes["in_var"],
             le_dict,
             sh_dict,
             filter_options,
         )
         original_file = build_file_paths(
-            top_dir,
+            config['top_dir'],
             [le_dict["sub_dir"], sh_dict["sub_dir"]],
             attributes["model"],
             [le_dict["filename"], sh_dict["filename"]],
@@ -227,14 +235,14 @@ def read_ilamb_data(
             ilamb_dict[f"{attributes['model']}_FSR"],
         )
         ilamb_dat = get_albedo_ds(
-            top_dir,
+            config['top_dir'],
             attributes["in_var"],
             rsds_dict,
             rsus_dict,
             filter_options,
         )
         original_file = build_file_paths(
-            top_dir,
+            config['top_dir'],
             [rsds_dict["sub_dir"], rsus_dict["sub_dir"]],
             attributes["model"],
             [rsds_dict["filename"], rsus_dict["filename"]],
@@ -243,7 +251,7 @@ def read_ilamb_data(
     else:
         # create the file_info dictionary
         file_info = {
-            "top_dir": top_dir,
+            "top_dir": config['top_dir'],
             "sub_dir": attributes["sub_dir"],
             "model": attributes["model"],
             "filename": attributes["filename"],
@@ -254,28 +262,10 @@ def read_ilamb_data(
 
         # construct original file name
         original_file = build_file_paths(
-            top_dir, attributes["sub_dir"], attributes["model"], attributes["filename"]
+            config['top_dir'], attributes["sub_dir"], attributes["model"], attributes["filename"]
         )
 
     return ilamb_dat, original_file
-
-
-def get_conversion_factor(input_string: str) -> float:
-    """Gets a conversion factor for ILAMB data based on an input string
-
-    Args:
-        input_string (str): input string
-
-    Returns:
-        float: conversion factor
-    """
-
-    if input_string == "intrinsic":
-        return 1 / 365.0
-    if input_string == "mrro":
-        return 24 * 60 * 60 / 365.0
-    return float(input_string)
-
 
 def get_filter_values(input_string: str) -> float:
     """Return values to filter to based on an input string
@@ -567,9 +557,6 @@ def get_annual_ds(
     annual_ds[out_var].attrs["units"] = metadata["units"]
     annual_ds[out_var].attrs["long_name"] = metadata["longname"]
 
-    # fill NAs with 0
-    annual_ds[out_var] = annual_ds[out_var].fillna(0)
-
     # add some global attributes
     annual_ds.attrs["Original"] = metadata["original_file"]
     annual_ds.attrs["Date"] = str(date.today())
@@ -582,7 +569,7 @@ def regrid_ilamb_ds(
     ds: xr.Dataset,
     target_grid: xr.Dataset,
     var: str,
-    method: str = "conservative",
+    method: str = "bilinear",
 ) -> xr.Dataset:
     """Regrids an ILAMB dataset based on an input target grid
 
@@ -598,6 +585,10 @@ def regrid_ilamb_ds(
         xr.Dataset: output dataset
     """
 
+    
+    # fill NAs with 0
+    ds[var] = ds[var].fillna(0)
+    
     # regrid
     regridder = xe.Regridder(ds, target_grid, method)
     ds_regrid = regridder(ds)
@@ -670,7 +661,7 @@ def compile_variable(var: str, models: list[str], out_dir: str) -> xr.Dataset:
     for model in models:
         file_name = os.path.join(out_dir, f"{model}_{var.upper()}.nc")
         ds = xr.open_dataset(file_name)
-        processed_ds = get_average_and_iav(ds, var) if var != "biomass" else ds[var].to_dataset(name='var')
+        processed_ds = get_average_and_iav(ds, var) if var != "biomass" else ds[var].to_dataset(name=var)
         processed_ds[f"{var}_cycle"] = ds[f"{var}_cycle"]
         processed_ds[f"{var}_month_of_max"] = ds[f"{var}_month_of_max"]
         processed_ds[f"{var}_anomaly"] = ds[f"{var}_anomaly"]
@@ -818,3 +809,27 @@ def filter_df(df: pd.DataFrame, filter_vars: list[str], tol: float) -> pd.DataFr
     df = df.dropna()
 
     return df
+
+def get_conf_dict(config_file: str) -> dict:
+    """Returns a conversion dictionary from a config file path
+
+    Args:
+        config_file (str): path to config file
+
+    Returns:
+        dict: dictionary with information about plotting ILAMB data
+    """
+
+    conversion_dict = config_to_dict(config_file)
+    for _, attributes in conversion_dict.items():
+        attributes["models"] = [
+            model.strip() for model in attributes["models"].split(",")
+        ]
+        if attributes["conversion_factor"] == "None":
+            attributes["conversion_factor"] = None
+        else:
+            attributes["conversion_factor"] = float(attributes["conversion_factor"])
+        attributes['diverging_cmap'] = str_to_bool(attributes['diverging_cmap'])
+            
+    return conversion_dict
+

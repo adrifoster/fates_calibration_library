@@ -17,15 +17,14 @@
 # Environment Variables (loaded from config file):
 #   CASE_DIR         Directory where cases will be created.
 #   SRC_DIR          Directory containing cime scripts.
-#   OUT_DIR          Output directory for the cases.
 #   STOP_N           Number of years for each submission of the simulation.
 #   RESUBMIT         Number of resubmissions.
 #   COMPSET          Compset to use
 #   CHARGENUM        Project charge number.
-#   USER_NL_DIR      Directory containig user_nl_* files
+#   USER_NL_DIR      Directory containing user_nl_* files
 #   USER_NL_FILE     user_nl_clm file name to use
 #   SPARSE_RUN       Whether run is sparse or global (true/false).
-#   MESH_DIR         Directory containig mesh files
+#   MESH_DIR         Directory containing mesh files
 #   MESH_FILE        mesh file name to use
 #
 # Example:
@@ -52,7 +51,7 @@ read_config "$config_file"
 
 # ensure required environment variables are set
 base_vars=(
-  CASE_DIR SRC_DIR OUT_DIR STOP_N RESUBMIT COMPSET 
+  CASE_DIR SRC_DIR STOP_N RESUBMIT COMPSET 
   CHARGENUM USER_NL_DIR USER_NL_FILE
   )
 check_required_vars "${base_vars[@]}"
@@ -93,11 +92,7 @@ cp ${USER_NL_DIR}/${USER_NL_FILE} user_nl_clm
 
 if [[ "$SPARSE_RUN" == true ]]; then
 
-  if [[ ! -d "$MESH_DIR" ]]; then
-    echo "ERROR: MESH_DIR does not exist!"
-    exit 1
-  fi
-  if [[ ! -f "$MESH_FILE" ]]; then
+  if [[ ! -f "${MESH_DIR}/${MESH_FILE}" ]]; then
     echo "ERROR: MESH_FILE does not exist!"
     exit 1
   fi

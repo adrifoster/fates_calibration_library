@@ -5,7 +5,52 @@ import os
 from datetime import date
 import xarray as xr
 import numpy as np
+import glob
 
+from fates_calibration_library.utils import config_to_dict, str_to_bool
+
+def month_difference(da1: xr.DataArray, da2: xr.DataArray) -> xr.DataArray:
+    """Calculate the minimum cyclic difference between two xarray DataArrays of months."""
+    diff = da2 - da1
+    return xr.where(diff > 6, diff - 12, xr.where(diff < -6, diff + 12, diff))
+
+def get_conversion_dict(config_file: str) -> dict:
+    """Returns a conversion dictionary from a config file path
+
+    Args:
+        config_file (str): path to config file
+
+    Returns:
+        dict: dictionary with information about plotting ILAMB data
+    """
+
+    conversion_dict = config_to_dict(config_file)
+    for _, attributes in conversion_dict.items():
+        attributes['diverging_cmap'] = str_to_bool(attributes['diverging_cmap'])
+        attributes['cf_time'] = get_conversion_factor(attributes['cf_time'])
+        attributes['cf_area'] = get_conversion_factor(attributes['cf_area'],
+                                                      convert_intrinsic=False)
+            
+    return conversion_dict
+    
+def get_conversion_factor(input_string: str, convert_intrinsic: bool=True) -> float:
+    """Gets a conversion factor for ILAMB data based on an input string
+
+    Args:
+        input_string (str): input string
+
+    Returns:
+        float: conversion factor
+    """
+
+    if input_string == "intrinsic":
+        if convert_intrinsic:
+            return 1 / 365.0
+        else:
+            return 'intrinsic'
+    if input_string == "mrro":
+        return 24 * 60 * 60 / 365.0
+    return float(input_string)
 
 def adjust_lon(ds: xr.Dataset, lon_name: str) -> xr.Dataset:
     """Adjusts the longitude values of a dataset to be from 0-360 to -180 to 180
@@ -35,38 +80,70 @@ def adjust_lon(ds: xr.Dataset, lon_name: str) -> xr.Dataset:
 
     return ds
 
+def get_files(hist_dir: str, hstream='h0') -> list[str]:
+    """Returns all clm history files in a directory given an input hstream
+
+    Args:
+        hist_dir (str): directory
+        hstream (str, optional): history level. Defaults to 'h0'.
+
+    Returns:
+        list[str]: list of files
+    """
+    return sorted(glob.glob(f"{hist_dir}/*clm2.{hstream}*.nc"))
+
+def get_zonal_means(ds, varlist, var_dict, land_area):
+    
+    ds_list = []
+    for var in varlist:
+        if var_dict[var]['cf_area'] == 'intrinsic':
+            cf_area = 1.0
+        else:
+            cf_area = var_dict[var]['cf_area']
+        ds_list.append(
+            get_zonal(ds[var], land_area, cf_area).to_dataset(name=var))
+
+    ds_out = xr.merge(ds_list)
+    
+    return ds_out
+
 
 def get_zonal(
     da: xr.DataArray,
-    new_units,
-    land_area: xr.DataArray = None,
-    conversion_factor: float = None,
+    land_area,
+    conversion_factor=None,
 ) -> xr.DataArray:
-    """Calculates zonal (by longitude) sum for an input global data array
+    """Calculates zonal (by longitude) mean for an input global data array
 
     Args:
         da (xr.DataArray): input data array
-        new_units (str): new units
-        land_area (xr.DataArray, optional): land area array. Defaults to None
-        conversion_factor (float, optional): conversion factor. Defaults to None.
+        land_area (xr.DataArray): land area array
+        conversion_factor (float): conversion factor
     Returns:
         xr.DataArray: output data array
     """
 
-    # convert if needed
-    if land_area is not None:
-        da = da * land_area
-    if conversion_factor is not None:
-        da = da * conversion_factor
+    # land area by latitude
+    land_area_by_lat = land_area.sum(dim="lon")
 
-    # sum up by latitude
-    by_lat = da.sum(dim="lon")
+    # compute area-weighted sum
+    area_weighted = (da * land_area).sum(dim="lon")
+    
+    # normalize by land area per latitude
+    if conversion_factor is None:
+        conversion_factor = 1 / land_area_by_lat
 
-    # update units
-    by_lat.attrs["units"] = new_units
+    # convert units
+    by_lat = conversion_factor * area_weighted
 
     return by_lat
 
+def get_sparse_climatology(ds, var, cf_time, cf_area, biome, land_area):
+    months = ds["time.daysinmonth"]
+    monthly_mean = cf_time*(months*ds[var]).groupby("time.month").mean()
+    monthly_global = area_mean_from_sparse(monthly_mean, biome, 'global', cf_area, land_area)
+
+    return monthly_global
 
 def get_monthly_max(monthly_mean: xr.DataArray) -> xr.DataArray:
     """Calculates the month of the maximum value of a monthly data array
@@ -89,13 +166,13 @@ def get_monthly_max(monthly_mean: xr.DataArray) -> xr.DataArray:
 
 
 def calculate_annual_mean(
-    data_array: xr.DataArray, conversion_factor: float = 1 / 365, new_units: str = ""
+    data_array: xr.DataArray, conversion_factor, new_units: str = ""
 ) -> xr.DataArray:
     """Calculates annual mean of an input DataArray, applies a conversion factor if supplied
 
     Args:
         da (xr.DataArray): input DataArray
-        conversion_factor (float, optional): Conversion factor. Defaults to 1/365.
+        conversion_factor (float): Conversion factor. 
         new_units (str, optional): new units, defaults to empty
 
     Returns:
@@ -124,8 +201,10 @@ def calculate_monthly_mean(
     """
 
     months = data_array["time.daysinmonth"]
+    
     monthly_mean = (
-        conversion_factor * (months * data_array).groupby("time.month").mean()
+        (conversion_factor * data_array * months).groupby("time.month").sum(dim="time") /
+        months.groupby("time.month").sum(dim="time")
     )
     monthly_mean.name = data_array.name
     return monthly_mean
@@ -143,6 +222,27 @@ def preprocess(data_set: xr.Dataset, data_vars: list[str]) -> xr.Dataset:
 
     return data_set[data_vars]
 
+
+def post_process_ds(hist_dir: str, data_vars: list[str], whittaker_ds: xr.Dataset, 
+                    start_year: int, end_year: int, filter_nyears: int=None,
+                   fates=True, sparse=True, ensemble=True) -> xr.Dataset:
+    
+    ds = get_clm_ds(get_files(hist_dir), data_vars, start_year, fates=fates,
+                    sparse=sparse, ensemble=ensemble)
+
+    if sparse:
+        ds['biome'] = whittaker_ds.biome
+        ds['biome_name'] = whittaker_ds.biome_name
+
+    if filter_nyears is not None:
+        years = np.unique(ds.time.dt.year)
+        last_n = years[-filter_nyears:]
+        ds = ds.sel(time=slice(f'{last_n[0]}-01-01', f'{last_n[-1]}-12-31'))
+        ds["time"] = xr.cftime_range(str(start_year), periods=len(ds.time), freq="MS")
+        
+    ds = ds.sel(time=slice(f'{start_year}-01-01', f'{end_year}-12-31'))
+
+    return ds
 
 def get_clm_ds(
     files: list[str],
@@ -284,6 +384,34 @@ def area_mean_from_sparse(
     return area_mean
 
 
+def area_mean(
+    da: xr.DataArray, cf, land_area: xr.DataArray
+) -> xr.DataArray:
+    """Calculates a global area-weighted mean of a global dataset
+
+    Args:
+        da (xr.DataArray): input data array
+        cf (_type_): conversion factor
+        land_area (xr.DataArray): land area data array
+
+    Returns:
+        xr.DataArray: output data array
+    """
+
+    # update conversion factor if need be
+    if cf == "intrinsic":
+        cf = 1 / land_area.sum(dim=['lat', 'lon']).values
+
+    # weight by landarea
+    area_weighted = land_area * da
+
+    # calculate area mean
+    area_mean = cf * area_weighted.sum(dim=['lat', 'lon'])
+
+    return area_mean
+
+
+
 def global_from_sparse(
     sparse_grid: xr.Dataset, da: xr.DataArray, ds: xr.Dataset
 ) -> xr.DataArray:
@@ -335,14 +463,13 @@ def global_from_sparse(
 
 
 def get_sparse_maps(
-    ds: xr.Dataset, sparse_grid: xr.Dataset, land_frac: xr.DataArray, varlist: list[str]
+    ds: xr.Dataset, sparse_grid: xr.Dataset, varlist: list[str]
 ) -> xr.Dataset:
     """Gets a dataset of global maps of a list of variables from a sparse dataset
 
     Args:
         ds (xr.Dataset): sparse grid dataset
         sparse_grid (xr.Dataset): sparse grid file
-        land_frac (xr.DataArray): land fraction [0-1]
         varlist (list[str]): list of variables
 
     Returns:
@@ -353,7 +480,7 @@ def get_sparse_maps(
     ds_list = []
     for var in varlist:
         var_ds = global_from_sparse(sparse_grid, ds[var], ds).to_dataset(name=var)
-        var_ds[var] = var_ds[var] * land_frac
+        var_ds[var] = var_ds[var]
         ds_list.append(var_ds)
 
     return xr.merge(ds_list)
@@ -375,6 +502,8 @@ def create_target_grid(file: str, var: str) -> xr.Dataset:
     target_grid['area'] = ds['area'].fillna(0)
     target_grid["landmask"] = ds["landmask"].fillna(0)
     target_grid["landfrac"] = ds["landfrac"].fillna(0)
+    target_grid['land_area'] = target_grid.area*target_grid.landfrac
+    target_grid['land_area'] = target_grid['land_area'].where(target_grid.lat > -60.0, 0.0)
 
     return target_grid
 
@@ -389,6 +518,49 @@ def get_annual_means(ds, varlist, var_dict, sparse=False):
         )
 
     ds_out = xr.merge(ds_list)
+    if sparse:
+        ds_out["grid1d_lat"] = ds.grid1d_lat
+        ds_out["grid1d_lon"] = ds.grid1d_lon
+
+    return ds_out
+
+def get_monthly_means(ds, varlist, var_dict, sparse=False):
+    ds_list = []
+    for var in varlist:
+        if var_dict[var]['cf_time'] == 1/365:
+            cf_time = 1.0
+        else:
+            cf_time = var_dict[var]['cf_time']
+        ds_list.append(
+            calculate_monthly_mean(
+                ds[var], cf_time).to_dataset(name=var)
+        )
+
+    ds_out = xr.merge(ds_list)
+    if sparse:
+        ds_out["grid1d_lat"] = ds.grid1d_lat
+        ds_out["grid1d_lon"] = ds.grid1d_lon
+
+    return ds_out
+
+def get_area_means(ds, varlist, var_dict, land_area):
+    ds_list = []
+    for var in varlist:
+        ds_list.append(
+            area_mean(
+                ds[var], var_dict[var]["cf_area"], land_area
+            ).to_dataset(name=var)
+        )
+
+    return xr.merge(ds_list)
+
+def get_month_of_maxes(ds, varlist, sparse=False):
+    ds_list = []
+    for var in varlist:
+        ds_list.append(ds[var].idxmax(dim='month').to_dataset(name=var))
+
+    ds_out = xr.merge(ds_list)
+    
     if sparse:
         ds_out["grid1d_lat"] = ds.grid1d_lat
         ds_out["grid1d_lon"] = ds.grid1d_lon
