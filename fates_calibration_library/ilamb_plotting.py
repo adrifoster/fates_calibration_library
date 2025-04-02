@@ -9,8 +9,6 @@ import xarray as xr
 from fates_calibration_library.analysis_functions import calculate_zonal_mean
 from fates_calibration_library.ilamb_functions import get_model_da
 from fates_calibration_library.plotting_functions import (
-    round_down,
-    round_up,
     get_blank_plot,
     generate_subplots,
     map_function,

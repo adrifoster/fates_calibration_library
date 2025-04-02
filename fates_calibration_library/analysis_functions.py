@@ -91,7 +91,7 @@ def calculate_zonal_mean(
     # convert units
     by_lat = conversion_factor * area_weighted
 
-    return by_lat.transpose("model", "lat")
+    return by_lat #.transpose("model", "lat")
 
 
 def get_sparse_climatology(
@@ -123,7 +123,7 @@ def get_sparse_climatology(
     return monthly_global
 
 
-def get_monthly_max(monthly_mean: xr.DataArray) -> xr.DataArray:
+def calculate_month_of_max(monthly_mean: xr.DataArray) -> xr.DataArray:
     """Calculates the month of the maximum value of a monthly data array
 
     Args:
@@ -138,7 +138,7 @@ def get_monthly_max(monthly_mean: xr.DataArray) -> xr.DataArray:
 
     # calculate the month of the maximum value
     month_of_max = monthly_mean.idxmax(dim="month")
-    month_of_max = month_of_max.where(np.abs(month_sum) > 0.0)
+    #month_of_max = month_of_max.where(np.abs(month_sum) > 0.0)
 
     return month_of_max
 
@@ -381,7 +381,7 @@ def area_mean_from_sparse(
     """
 
     ## update conversion factor if need be
-    if cf == "intrinsic":
+    if cf is None:
         if domain == "global":
             cf = 1 / land_area.sum()
         else:
@@ -421,7 +421,7 @@ def area_mean(da: xr.DataArray, cf, land_area: xr.DataArray) -> xr.DataArray:
     """
 
     # update conversion factor if need be
-    if cf == "intrinsic":
+    if cf is None:
         cf = 1 / land_area.sum(dim=["lat", "lon"]).values
 
     # weight by landarea
@@ -506,39 +506,36 @@ def create_target_grid(file: str, var: str) -> xr.Dataset:
 
     return target_grid
 
-def apply_to_vars(ds: xr.Dataset, varlist: list[str], func, *args, **kwargs) -> xr.Dataset:
+def apply_to_vars(ds: xr.Dataset, varlist: list[str], func, add_sparse: bool, 
+                  *args, **kwargs) -> xr.Dataset:
     """Applies a function to each variable in varlist and merges results.
 
     Args:
         ds (xr.Dataset): Input dataset.
         varlist (list[str]): List of variables to process.
         func (callable): Function to apply to each variable.
-        *args: Additional positional arguments for the function.
+        add_sparse (bool): whether or not to add sparse grid
+        *args: Positional arguments for the function
         **kwargs: Additional keyword arguments for the function.
 
     Returns:
         xr.Dataset: Merged dataset with processed variables.
     """
-    ds_list = [func(ds[var], *args, **kwargs).to_dataset(name=var) for var in varlist]
-    return xr.merge(ds_list)
 
-def get_zonal_means(
-    ds: xr.Dataset, varlist: list[str], var_dict: dict, land_area: xr.DataArray
-) -> xr.Dataset:
-    """Calculates zonal weighted area means (by latitude) for a range of input variables
-
-    Args:
-        ds (xr.Dataset): input dataset
-        varlist (list[str]): list of variables to compute
-        var_dict (dict): dictionary with information about the variables
-        land_area (xr.DataArray): land area [km2]
-
-    Returns:
-        xr.Dataset: output dataset
-    """
-    cf_area_dict = {var: var_dict[var]["cf_area"] if var_dict[var]["cf_area"] is not None else 1.0 for var in varlist}
-
-    return apply_to_vars(ds, varlist, calculate_zonal_mean, land_area, cf_area_dict)
+    ds_out = xr.Dataset()
+    for var in varlist:
+        
+        var_kwargs = {
+            key: (val[var] if isinstance(val, dict) and var in val else val)
+            for key, val in kwargs.items()
+        }
+        ds_out[var] = func(ds[var], *args, **var_kwargs)
+        
+    if add_sparse:
+        ds_out["grid1d_lat"] = ds.grid1d_lat
+        ds_out["grid1d_lon"] = ds.grid1d_lon
+    
+    return ds_out
 
 def get_sparse_maps(
     ds: xr.Dataset, sparse_grid: xr.Dataset, varlist: list[str]
@@ -564,63 +561,14 @@ def get_sparse_maps(
     return xr.merge(ds_list)
 
 
-
-def get_annual_means(ds: xr.Dataset, varlist: list[str], var_dict: dict, sparse: bool=False):
-    ds_list = []
-    for var in varlist:
-        ds_list.append(
-            calculate_annual_mean(
-                ds[var], var_dict[var]["cf_time"], var_dict[var]["annual_units"]
-            ).to_dataset(name=var)
-        )
-
-    ds_out = xr.merge(ds_list)
-    if sparse:
-        ds_out["grid1d_lat"] = ds.grid1d_lat
-        ds_out["grid1d_lon"] = ds.grid1d_lon
-
-    return ds_out
-
-
-def get_monthly_means(ds, varlist, var_dict, sparse=False):
-    ds_list = []
-    for var in varlist:
-        if var_dict[var]["cf_time"] == 1 / 365:
-            cf_time = 1.0
-        else:
-            cf_time = var_dict[var]["cf_time"]
-        ds_list.append(calculate_monthly_mean(ds[var], cf_time).to_dataset(name=var))
-
-    ds_out = xr.merge(ds_list)
-    if sparse:
-        ds_out["grid1d_lat"] = ds.grid1d_lat
-        ds_out["grid1d_lon"] = ds.grid1d_lon
-
-    return ds_out
-
-
 def get_area_means(ds, varlist, var_dict, land_area):
     ds_list = []
     for var in varlist:
         ds_list.append(
-            area_mean(ds[var], var_dict[var]["cf_area"], land_area).to_dataset(name=var)
+            area_mean(ds[var], var_dict[var]["area_conversion_factor"], land_area).to_dataset(name=var)
         )
 
     return xr.merge(ds_list)
-
-
-def get_month_of_maxes(ds, varlist, sparse=False):
-    ds_list = []
-    for var in varlist:
-        ds_list.append(ds[var].idxmax(dim="month").to_dataset(name=var))
-
-    ds_out = xr.merge(ds_list)
-
-    if sparse:
-        ds_out["grid1d_lat"] = ds.grid1d_lat
-        ds_out["grid1d_lon"] = ds.grid1d_lon
-
-    return ds_out
 
 
 def get_sparse_area_means(ds, domain, varlist, var_dict, land_area, biome):
@@ -628,7 +576,7 @@ def get_sparse_area_means(ds, domain, varlist, var_dict, land_area, biome):
     for var in varlist:
         ds_list.append(
             area_mean_from_sparse(
-                ds[var], biome, domain, var_dict[var]["cf_area"], land_area
+                ds[var], biome, domain, var_dict[var]["area_conversion_factor"], land_area
             ).to_dataset(name=var)
         )
 

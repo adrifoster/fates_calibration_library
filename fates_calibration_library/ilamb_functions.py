@@ -11,7 +11,7 @@ import xesmf as xe
 from fates_calibration_library.analysis_functions import (
     calculate_monthly_mean,
     calculate_annual_mean,
-    get_monthly_max,
+    calculate_month_of_max,
 )
 from fates_calibration_library.utils import evaluate_conversion_factor
 
@@ -108,7 +108,7 @@ def process_dataset(
         
 
     # calculate month of maximum value
-    month_of_max = get_monthly_max(regridded_monthly[f"{attributes['out_var']}_monthly"]).to_dataset(
+    month_of_max = calculate_month_of_max(regridded_monthly[f"{attributes['out_var']}_monthly"]).to_dataset(
         name=f"{attributes['out_var']}_month_of_max"
     )
 
