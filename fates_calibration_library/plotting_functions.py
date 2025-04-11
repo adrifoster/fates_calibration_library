@@ -10,6 +10,7 @@ from cartopy.mpl.geocollection import GeoQuadMesh
 import seaborn as sns
 
 from fates_calibration_library.analysis_functions import month_difference
+from fates_calibration_library.analysis_functions import calculate_zonal_mean
 
 _COLS = [
     "#e60049",
@@ -23,6 +24,105 @@ _COLS = [
     "#00bfa0",
     ]
 
+def plot_zonal_mean_diff(da1: xr.DataArray, da2: xr.DataArray, ds1_name: str, 
+                           ds2_name: str, var: str, long_name: str, units: str):
+    """Plot an annual cycle of a variable
+
+    Args:
+        da1 (xr.DataArray): data array for dataset 1
+        da2 (xr.DataArray): data array for dataset 2
+        var (str): variable name
+        ds1_name (str): name of first dataset
+        ds2_name (str): name of second dataset
+        ylabel (str): label for y axis
+        units (str): units for y axis
+    """
+
+    # merge together
+    ds = xr.concat([da1.to_dataset(name=var), da2.to_dataset(name=var)], dim='version')
+    ds = ds.assign_coords(version=("version", [ds1_name, ds2_name]))
+    
+    df = pd.DataFrame({
+        "lat": np.tile(ds.lat, len(ds.version)),
+        "version": np.repeat(ds.version, len(ds.lat)),
+        var: ds[var].values.flatten()}
+    )
+    
+    # plot
+    get_blank_plot()
+    plt.ylim(-90, 90)
+    plt.grid(True, which='both', axis='y', linestyle='--', linewidth=0.5, color='black', alpha=0.3)
+    plt.tick_params(bottom=False, top=False, left=False, right=False)
+    
+    # plot models
+    for rank, version in enumerate(np.unique(df.version.values)):
+        data = df[df.version == version]
+        plt.plot(data[var].values, data.lat.values, lw=2, color=_COLS[rank], label=version)
+
+    plt.ylabel("Latitude (º)", fontsize=11)
+    plt.xlabel(f"Annual {long_name} ({units})", fontsize=11)
+    plt.legend(loc="upper right")
+    plt.title("Zonal Mean Difference")
+    
+def plot_model_obs_climatology_diff(ilamb_var, model_var, var_name, model_name, long_name, units):
+
+    ilamb_df = pd.DataFrame({
+        "month": np.tile(ilamb_var.month, len(ilamb_var.model)),
+        "model": np.repeat(ilamb_var.model, len(ilamb_var.month)),
+        var_name: ilamb_var.values.flatten()}
+    )
+    
+    
+    get_blank_plot()
+    
+    # add latitude-specific ticks/lines
+    plt.xlim(1, 12)
+    plt.xticks(range(1, 13, 1), ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 
+                                 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], fontsize=10)
+
+    plt.grid(True, which='both', axis='y', linestyle='--', linewidth=0.5, color='black', alpha=0.3)
+    plt.tick_params(bottom=False, top=False, left=False, right=False)
+    
+    # plot models
+    for rank, model in enumerate(np.unique(ilamb_df.model.values)):
+        data = ilamb_df[ilamb_df.model == model]
+        plt.plot(data.month.values, data[var_name].values, lw=2, color=_COLS[rank], label=model)
+    
+    plt.plot(model_var.month.values, model_var.values, lw=2, color='black', label='FATES')
+    
+    plt.xlabel("Month", fontsize=11)
+    plt.ylabel(f"{long_name} ({units})", fontsize=11)
+    plt.legend(loc="upper right")
+    
+def plot_model_obs_zonal_diff(ilamb_var, model_var, land_area, conversion_factor, var_name, model_name, long_name, units):
+
+    ilamb_by_lat = calculate_zonal_mean(ilamb_var, land_area, conversion_factor)
+    ilamb_by_lat = ilamb_by_lat.transpose("model", "lat")
+    df = pd.DataFrame(
+        {
+            "lat": np.tile(ilamb_by_lat.lat, len(ilamb_by_lat.model)),
+            "model": np.repeat(ilamb_by_lat.model, len(ilamb_by_lat.lat)),
+            var_name: ilamb_by_lat.values.flatten(),
+        }
+    )
+    
+    get_blank_plot()
+    
+    # add latitude-specific ticks/lines
+    plt.ylim(-90, 90)
+    plt.grid(True, which='both', axis='y', linestyle='--', linewidth=0.5, color='black', alpha=0.3)
+    plt.tick_params(bottom=False, top=False, left=False, right=False)
+    
+    # plot models
+    for rank, model in enumerate(np.unique(df.model.values)):
+        data = df[df.model == model]
+        plt.plot(data[var_name].values, data.lat.values, lw=2, color=_COLS[rank], label=model)
+    
+    plt.plot(model_var.values, model_var.lat.values, lw=2, color='black', label='FATES')
+    
+    plt.ylabel("Latitude (º)", fontsize=11)
+    plt.xlabel(f"Annual {long_name} ({units})", fontsize=11)
+    plt.legend(loc="upper right")
 
 def choose_subplot_dimensions(num_plots: int) -> tuple[int, int]:
     """Chooses a nice array size/dimension for plotting subplots based on the total

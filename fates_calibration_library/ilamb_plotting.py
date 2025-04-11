@@ -153,6 +153,7 @@ def plot_by_lat(
         land_area,
         conversion_factor,
     )
+    by_lat = by_lat.transpose("model", "lat")
 
     # turn into pandas data frame for easier plotting
     df = pd.DataFrame(

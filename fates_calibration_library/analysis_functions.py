@@ -91,7 +91,7 @@ def calculate_zonal_mean(
     # convert units
     by_lat = conversion_factor * area_weighted
 
-    return by_lat #.transpose("model", "lat")
+    return by_lat 
 
 
 def get_sparse_climatology(
@@ -160,14 +160,13 @@ def calculate_annual_mean(
     months = data_array["time.daysinmonth"]
     
     if conversion_factor is None:
-        conversion_factor = 1 / months.groupby("time.year").sum()
+        conversion_factor = 1/365
     
-    annual_mean = conversion_factor * (months * data_array).groupby("time.year").sum()
+    annual_mean = conversion_factor * (months * data_array).groupby("time.year").sum().compute()
     annual_mean.name = data_array.name
     if new_units != "":
         annual_mean.attrs["units"] = new_units
     return annual_mean
-
 
 def calculate_monthly_mean(
     data_array: xr.DataArray, conversion_factor: float=None
@@ -253,8 +252,8 @@ def post_process_ds(
 
     # filter on years
     if filter_nyears is not None:
-        years = np.unique(ds.time.dt.year)
-        last_n = years[-filter_nyears:]
+        mod_years = np.unique(ds.time.dt.year)
+        last_n = mod_years[-filter_nyears:]
         ds = ds.sel(time=slice(f"{last_n[0]}-01-01", f"{last_n[-1]}-12-31"))
         ds["time"] = xr.cftime_range(str(years[0]), periods=len(ds.time), freq="MS")
 

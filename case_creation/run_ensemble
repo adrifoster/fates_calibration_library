@@ -81,8 +81,6 @@ if [[ -z "$config_file" ]]; then
   exit 1
 fi
 
-config_file="$1"
-
 # source utility functions
 source "$(dirname "$0")/common_utils"
 
