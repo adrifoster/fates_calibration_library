@@ -1,3 +1,5 @@
+"""Functions to assist with plotting"""
+
 import math
 import numpy as np
 import pandas as pd
@@ -45,10 +47,8 @@ _PFT_COLS = [
 
 
 def plot_zonal_mean_diff(
-    da1: xr.DataArray,
-    da2: xr.DataArray,
-    ds1_name: str,
-    ds2_name: str,
+    data_arrays: list[xr.DataArray],
+    dataset_names: list[str],
     var: str,
     long_name: str,
     units: str,
@@ -56,18 +56,20 @@ def plot_zonal_mean_diff(
     """Plot an annual cycle of a variable
 
     Args:
-        da1 (xr.DataArray): data array for dataset 1
-        da2 (xr.DataArray): data array for dataset 2
+        data_arrays (list[xr.DataArray]): data arrays to plot
+        dataset_names (list[str]): names of datasets
         var (str): variable name
-        ds1_name (str): name of first dataset
-        ds2_name (str): name of second dataset
         ylabel (str): label for y axis
         units (str): units for y axis
     """
+    assert len(data_arrays) == len(
+        dataset_names
+    ), "Each DataArray must have a corresponding name"
 
-    # merge together
-    ds = xr.concat([da1.to_dataset(name=var), da2.to_dataset(name=var)], dim="version")
-    ds = ds.assign_coords(version=("version", [ds1_name, ds2_name]))
+    # convert all to datasets and concatenate
+    datasets = [da.to_dataset(name=var) for da in data_arrays]
+    ds = xr.concat(datasets, dim="version")
+    ds = ds.assign_coords(version=("version", dataset_names))
 
     df = pd.DataFrame(
         {
@@ -94,9 +96,8 @@ def plot_zonal_mean_diff(
     # plot models
     for rank, version in enumerate(np.unique(df.version.values)):
         data = df[df.version == version]
-        plt.plot(
-            data[var].values, data.lat.values, lw=2, color=_COLS[rank], label=version
-        )
+        color = _COLS[rank % len(_COLS)]  # cycle through _COLS if needed
+        plt.plot(data[var].values, data.lat.values, lw=2, color=color, label=version)
 
     plt.ylabel("Latitude (º)", fontsize=11)
     plt.xlabel(f"Annual {long_name} ({units})", fontsize=11)
@@ -104,9 +105,16 @@ def plot_zonal_mean_diff(
     plt.title("Zonal Mean Difference")
 
 
-def plot_model_obs_climatology_diff(
-    ilamb_var, model_var, var_name, model_name, long_name, units
-):
+def plot_model_obs_climatology_diff(ilamb_var: xr.DataArray, model_var: xr.DataArray, var_name: str, long_name: str, units: str):
+    """Plots climatology for observations against modeled data
+
+    Args:
+        ilamb_var (xr.DataArray): observational data
+        model_var (xr.DataArray): model data
+        var_name (str): variable name
+        long_name (str): long name
+        units (str): units for plotting
+    """
 
     ilamb_df = pd.DataFrame(
         {
@@ -176,7 +184,6 @@ def plot_model_obs_zonal_diff(
     land_area,
     conversion_factor,
     var_name,
-    model_name,
     long_name,
     units,
 ):
@@ -233,11 +240,10 @@ def choose_subplot_dimensions(num_plots: int) -> tuple[int, int]:
 
     if num_plots < 2:
         return num_plots, 1
-    elif num_plots < 11:
+    if num_plots < 11:
         return math.ceil(num_plots / 2), 2
-    else:
-        # I've chosen to have a maximum of 3 columns
-        return math.ceil(num_plots / 3), 3
+    # I've chosen to have a maximum of 3 columns
+    return math.ceil(num_plots / 3), 3
 
 
 def plot_model_obs_diff(model_ds, obs_da, land_frac, var, units, model_name):
@@ -607,7 +613,8 @@ def plot_heatmap(summary_df):
 
 
 def summarize_differences(ds1, ds2, ds1_name, ds2_name, var_dict):
-    """Summarize global differences between two xarray datasets, handling Dask arrays and adding units."""
+    """Summarize global differences between two xarray datasets, handling Dask arrays and
+    adding units."""
 
     summary = []
     for var in ds1.data_vars:
