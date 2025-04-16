@@ -1,6 +1,5 @@
 """Methods for plotting ILAMB data"""
 
-import math
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -27,7 +26,13 @@ _COLS = [
 ]
 
 
-def plot_month_of_max(da, long_name):
+def plot_month_of_max(da: xr.DataArray, long_name: str):
+    """Plots the month of max (da)
+
+    Args:
+        da (xr.DataArray): data array with month of max
+        long_name (str): long name for plotting
+    """
 
     models = da.model.values
     num_plots = len(models)
@@ -86,7 +91,6 @@ def plot_global(
     long_name: str,
     units: str,
     cmap: str,
-    vlims: list[float] = [],
     diverging_cmap: bool = False,
 ):
     """Plots a global data array of ILAMB models, one subplot per model
@@ -96,17 +100,12 @@ def plot_global(
         long_name (str): variable name for legend
         units (str): units for legend
         cmap (str): colormap to use
-        vlims (list[float]): variables limits, defaults to empty
         diverging_cmap (bool, optional): whether the colormap is a diverging scale.
                                     Defaults to False.
     """
 
-    if len(vlims) == 0:
-        vmin = da.min().values
-        vmax = da.max().values
-    else:
-        vmin = vlims[0]
-        vmax = vlims[1]
+    vmin = da.min().values
+    vmax = da.max().values
     models = da.model.values
     num_plots = len(models)
 
@@ -214,7 +213,16 @@ def plot_by_lat(
     plt.legend(loc="upper right")
 
 
-def plot_annual_cycle(da, var, ylabel, units, title):
+def plot_annual_cycle(da: xr.DataArray, var: str, ylabel: str, units: str, title: str):
+    """Plots climatology (i.e. annual cycle)
+
+    Args:
+        da (xr.DataArray): input annual cycle data array
+        var (str): variable name
+        ylabel (str): label for y axis
+        units (str): units for y axis
+        title (str): plot title
+    """
     df = pd.DataFrame(
         {
             "month": np.tile(da.month, len(da.model)),
@@ -274,7 +282,6 @@ def plot_ilamb_var(
     ilamb_dat: xr.Dataset,
     var: str,
     plot_config: dict,
-    vlims: list[float] = [],
 ):
     """Plots ILAMB data, globally and by latitude, for a variable for all models
 
@@ -289,7 +296,6 @@ def plot_ilamb_var(
             - lat_units (str): latitude units for axes
             - cmap (str): color map for global plot
             - diverging_cmap (bool): whether the cmap is diverging or not
-        vlims (list[float]): variables limits [min,max], defaults to empty
     """
 
     # get the annual data for just this variable
@@ -301,7 +307,6 @@ def plot_ilamb_var(
         plot_config["long_name"],
         plot_config["global_units"],
         plot_config["cmap"],
-        vlims=vlims,
         diverging_cmap=plot_config["diverging_cmap"],
     )
 
