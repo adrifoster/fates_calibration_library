@@ -24,6 +24,10 @@ _COLS = [
     "#00bfa0",
     ]
 
+_PFT_COLS = ['#23B44E', '#496041', '#F15A46', '#1DB58C', '#88F6E5', '#FFBF02',
+          '#AADC32', '#AB2F5D', '#AB2F5D', '#738678', '#9DC183', '#2C728E', '#FFF3B0', 
+          '#E09F3F', '#BCB06F', '#9C9478']
+
 def plot_zonal_mean_diff(da1: xr.DataArray, da2: xr.DataArray, ds1_name: str, 
                            ds2_name: str, var: str, long_name: str, units: str):
     """Plot an annual cycle of a variable
@@ -401,39 +405,39 @@ def plot_month_of_max_diff(da1, da2, ds1_name, ds2_name, fates_var):
     figure.suptitle(f'Comparison for Month of Max for {fates_var}')
 
 
-def plot_pft_grid(colors, names, obs_data, obs_df):
+# def plot_pft_grid(colors, names, obs_data, obs_df):
 
-    cmap = matplotlib.colors.ListedColormap(colors)
+#     cmap = matplotlib.colors.ListedColormap(colors)
 
-    fig, ax = plt.subplots(figsize=(13, 6), subplot_kw=dict(projection=ccrs.Robinson()))
-    ax.coastlines()
-    ocean = ax.add_feature(
-        cfeature.NaturalEarthFeature("physical", "ocean", "110m", facecolor="white")
-    )
+#     fig, ax = plt.subplots(figsize=(13, 6), subplot_kw=dict(projection=ccrs.Robinson()))
+#     ax.coastlines()
+#     ocean = ax.add_feature(
+#         cfeature.NaturalEarthFeature("physical", "ocean", "110m", facecolor="white")
+#     )
 
-    pcm = ax.pcolormesh(
-        obs_data.lon,
-        obs_data.lat,
-        obs_data.biome,
-        transform=ccrs.PlateCarree(),
-        shading="auto",
-        cmap=cmap,
-        vmin=-0.5,
-        vmax=9.5,
-    )
-    scatter = ax.scatter(
-        obs_df.lon,
-        obs_df.lat,
-        s=10,
-        c="none",
-        edgecolor="black",
-        transform=ccrs.PlateCarree(),
-    )
-    cbar = fig.colorbar(pcm, ax=ax, fraction=0.03, orientation="vertical")
-    cbar.set_label("Biome", size=12, fontweight="bold")
-    cbar.set_ticks([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-    cbar.set_ticklabels(names)
-    ax.set_extent([-50, 180, -10, 10])
+#     pcm = ax.pcolormesh(
+#         obs_data.lon,
+#         obs_data.lat,
+#         obs_data.biome,
+#         transform=ccrs.PlateCarree(),
+#         shading="auto",
+#         cmap=cmap,
+#         vmin=-0.5,
+#         vmax=9.5,
+#     )
+#     scatter = ax.scatter(
+#         obs_df.lon,
+#         obs_df.lat,
+#         s=10,
+#         c="none",
+#         edgecolor="black",
+#         transform=ccrs.PlateCarree(),
+#     )
+#     cbar = fig.colorbar(pcm, ax=ax, fraction=0.03, orientation="vertical")
+#     cbar.set_label("Biome", size=12, fontweight="bold")
+#     cbar.set_ticks([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+#     cbar.set_ticklabels(names)
+#     ax.set_extent([-50, 180, -10, 10])
 
 
 def plot_heatmap(summary_df):
@@ -571,74 +575,120 @@ def plot_rel_sd_var(obs_ds, obs_var, name, points, pft="all"):
         f"Observed {name} Relative Standard Deviation", size=10, fontweight="bold"
     )
 
+def plot_pft_percent(ds:xr.Dataset, var: str, pft: str):
+    """Plot PFT percentage for a surface dataset
 
-def plot_mean_var(obs_ds, obs_var, name, units, points, cmap, pft="all"):
-
-    obs = average_obs_by_model(obs_ds, ILAMB_MODELS[obs_var.upper()], obs_var)
-    vmin = obs[obs_var].min().values
-    vmax = obs[obs_var].max().values
-
-    fig, ax = plt.subplots(figsize=(13, 6), subplot_kw=dict(projection=ccrs.Robinson()))
-
+    Args:
+        ds (xr.Dataset): subset surface dataset
+        var (str): variable to plot, depends on whether a natural or crop functional type
+        pft (str): PFT name
+    """
+    
+    fig, ax = plt.subplots(figsize=(13, 6),
+                   subplot_kw=dict(projection=ccrs.Robinson()))
     ax.coastlines()
-    ax.add_feature(
-        cfeature.NaturalEarthFeature("physical", "ocean", "110m", facecolor="white")
-    )
+    ax.add_feature(cfeature.NaturalEarthFeature('physical', 'ocean', '110m',
+                                                    facecolor='white'))
 
-    pcm = ax.pcolormesh(
-        obs.lon,
-        obs.lat,
-        obs[obs_var],
-        transform=ccrs.PlateCarree(),
-        shading="auto",
-        cmap=cmap,
-        vmin=vmin,
-        vmax=vmax,
-    )
-    if pft != "all":
-        points = points[points.pft == pft]
+    pcm = ax.pcolormesh(ds.lon, ds.lat, ds[var],
+                        transform=ccrs.PlateCarree(), shading='auto',
+                        cmap='viridis', vmin=0, vmax=100)
+    fig.colorbar(pcm, ax=ax, fraction=0.03, orientation='vertical')
+    plt.title(pft)
+    
+def plot_pft_grids(ds: xr.Dataset, pft_names: list[str], title: str):
+    """Plot a map of PFT grids
 
-    ax.scatter(
-        points.lon,
-        points.lat,
-        s=15,
-        c="none",
-        edgecolor="black",
-        transform=ccrs.PlateCarree(),
-    )
+    Args:
+        ds (xr.Dataset): input pft grid
+        pft_names (list[str]): list of pft names
+        title (str): title for plot
+    """
 
-    cbar = fig.colorbar(pcm, ax=ax, fraction=0.03, orientation="horizontal")
-    cbar.set_label(f"Observed {name} ({units})", size=10, fontweight="bold")
+    cmap = matplotlib.colors.ListedColormap(_PFT_COLS)
+    fig, ax = plt.subplots(figsize=(13, 6),
+                    subplot_kw=dict(projection=ccrs.Robinson()))
+    ax.coastlines()
+    ax.add_feature(cfeature.NaturalEarthFeature('physical', 'ocean', '110m',
+                                                    facecolor='white'))
+
+    pcm = ax.pcolormesh(ds.lon, ds.lat, ds.pft,
+                    transform=ccrs.PlateCarree(), shading='auto',
+                    cmap=cmap, vmin=0.5,
+                    vmax=16.5)
+    cbar = fig.colorbar(pcm, ax=ax, fraction=0.03, orientation='vertical')
+    cbar.set_label('PFT', size=12, fontweight='bold')
+    cbar.set_ticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+    cbar.set_ticklabels([pft.replace('_', ' ') for pft in pft_names])
+    plt.title(title)
+
+# def plot_mean_var(obs_ds, obs_var, name, units, points, cmap, pft="all"):
+
+#     obs = average_obs_by_model(obs_ds, ILAMB_MODELS[obs_var.upper()], obs_var)
+#     vmin = obs[obs_var].min().values
+#     vmax = obs[obs_var].max().values
+
+#     fig, ax = plt.subplots(figsize=(13, 6), subplot_kw=dict(projection=ccrs.Robinson()))
+
+#     ax.coastlines()
+#     ax.add_feature(
+#         cfeature.NaturalEarthFeature("physical", "ocean", "110m", facecolor="white")
+#     )
+
+#     pcm = ax.pcolormesh(
+#         obs.lon,
+#         obs.lat,
+#         obs[obs_var],
+#         transform=ccrs.PlateCarree(),
+#         shading="auto",
+#         cmap=cmap,
+#         vmin=vmin,
+#         vmax=vmax,
+#     )
+#     if pft != "all":
+#         points = points[points.pft == pft]
+
+#     ax.scatter(
+#         points.lon,
+#         points.lat,
+#         s=15,
+#         c="none",
+#         edgecolor="black",
+#         transform=ccrs.PlateCarree(),
+#     )
+
+#     cbar = fig.colorbar(pcm, ax=ax, fraction=0.03, orientation="horizontal")
+#     cbar.set_label(f"Observed {name} ({units})", size=10, fontweight="bold")
 
 
-def plot_obs_hists(obs_df, pft, vars, names, units):
+# def plot_obs_hists(obs_df, pft, vars, names, units):
 
-    palette, biome_names = get_biome_palette()
+#     palette, biome_names = get_biome_palette()
 
-    pft_df = obs_df[obs_df.pft == pft]
-    fig, axes = plt.subplots(figsize=(12, 12), nrows=2, ncols=2)
-    axes = axes.flatten(order=("C"))
-    for i, ax in enumerate(axes):
-        sns.histplot(
-            data=pft_df,
-            x=vars[i],
-            hue="biome",
-            stat="count",
-            edgecolor=None,
-            palette=palette,
-            multiple="stack",
-            ax=ax,
-        )
-        ax.set_ylabel("Number of Gridcells", fontsize=11)
-        ax.set_xlabel(f"Observed {names[i]} ({units[i]})", fontsize=11)
-        ax.get_legend().remove()
+#     pft_df = obs_df[obs_df.pft == pft]
+#     fig, axes = plt.subplots(figsize=(12, 12), nrows=2, ncols=2)
+#     axes = axes.flatten(order=("C"))
+#     for i, ax in enumerate(axes):
+#         sns.histplot(
+#             data=pft_df,
+#             x=vars[i],
+#             hue="biome",
+#             stat="count",
+#             edgecolor=None,
+#             palette=palette,
+#             multiple="stack",
+#             ax=ax,
+#         )
+#         ax.set_ylabel("Number of Gridcells", fontsize=11)
+#         ax.set_xlabel(f"Observed {names[i]} ({units[i]})", fontsize=11)
+#         ax.get_legend().remove()
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    axes[0].legend(
-        handles,
-        labels,
-        title="Biome",
-        labels=np.flip([biome_names[int(b)] for b in np.unique(pft_df.biome)]),
-    )
-    fig.suptitle(f"Observations for {pft} grids")
-    fig.tight_layout()
+#     handles, labels = axes[0].get_legend_handles_labels()
+#     axes[0].legend(
+#         handles,
+#         labels,
+#         title="Biome",
+#         labels=np.flip([biome_names[int(b)] for b in np.unique(pft_df.biome)]),
+#     )
+#     fig.suptitle(f"Observations for {pft} grids")
+#     fig.tight_layout()

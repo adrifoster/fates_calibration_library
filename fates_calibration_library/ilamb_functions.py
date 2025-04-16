@@ -3,6 +3,7 @@
 import os
 from datetime import date
 from typing import Dict, Optional
+from functools import reduce
 import xarray as xr
 import numpy as np
 import pandas as pd
@@ -14,6 +15,7 @@ from fates_calibration_library.analysis_functions import (
     calculate_month_of_max,
 )
 from fates_calibration_library.utils import evaluate_conversion_factor
+from fates_calibration_library.surface_data_functions import extract_biome
 
 def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
     """Processes ILAMB datasets: reads, converts to annual values, regrids, and saves.
@@ -790,3 +792,32 @@ def filter_df(df: pd.DataFrame, filter_vars: list[str], tol: float) -> pd.DataFr
     df = df.dropna()
 
     return df
+
+def extract_ilamb_obs(obs_ds: xr.Dataset, grids: pd.DataFrame, biome: xr.DataArray, 
+                      ilamb_config: dict, threshold_dict: dict):
+    """Extract ILAMB and Whittaker biomes for a set of lat/lons
+
+    Args:
+        obs_ds (xr.Dataset): ILAMB observations
+        grids (pd.DataFrame): dataframe with lat and lons
+        biome (xr.DataArray): whittaker biomes
+        ilamb_config (dict): config dictionary with information about ILAMB data
+        threshold_dict (dict): config dicationary with information about thresholding:
+            - 'threshold_vars': variables to threshold uncertainty on
+            - 'tol':            tolerance value
+
+    Returns:
+        _type_: _description_
+    """
+    
+    all_df = []
+    for _, attributes in ilamb_config.items():
+        # extract all ILAMB data
+        all_df.append(extract_obs(obs_ds, attributes['var'], attributes['models'], grids.lats.values, grids.lons.values))
+    
+    # also add in whittaker biome
+    all_df.append(extract_biome(biome, grids.lats.values, grids.lons.values, grids.pft.values))
+    out_df = reduce(lambda x, y: pd.merge(x, y, on=['lat', 'lon']), all_df)
+
+    # return filtered df
+    return filter_df(out_df, threshold_dict['filter_vars'], threshold_dict['tol'])
