@@ -7,6 +7,7 @@ from datetime import date
 import xarray as xr
 import numpy as np
 
+
 def month_difference(da1: xr.DataArray, da2: xr.DataArray) -> xr.DataArray:
     """Calculate the minimum cyclic difference between two xarray DataArrays of months.
 
@@ -17,9 +18,10 @@ def month_difference(da1: xr.DataArray, da2: xr.DataArray) -> xr.DataArray:
     Returns:
         xr.DataArray: output data array
     """
-    
+
     diff = da2 - da1
     return xr.where(diff > 6, diff - 12, xr.where(diff < -6, diff + 12, diff))
+
 
 def adjust_lon(ds: xr.Dataset, lon_name: str) -> xr.Dataset:
     """Adjusts the longitude values of a dataset to be from 0-360 to -180 to 180
@@ -91,7 +93,7 @@ def calculate_zonal_mean(
     # convert units
     by_lat = conversion_factor * area_weighted
 
-    return by_lat 
+    return by_lat
 
 
 def get_sparse_climatology(
@@ -138,13 +140,13 @@ def calculate_month_of_max(monthly_mean: xr.DataArray) -> xr.DataArray:
 
     # calculate the month of the maximum value
     month_of_max = monthly_mean.idxmax(dim="month")
-    #month_of_max = month_of_max.where(np.abs(month_sum) > 0.0)
+    # month_of_max = month_of_max.where(np.abs(month_sum) > 0.0)
 
     return month_of_max
 
 
 def calculate_annual_mean(
-    data_array: xr.DataArray, conversion_factor: float=None, new_units: str = ""
+    data_array: xr.DataArray, conversion_factor: float = None, new_units: str = ""
 ) -> xr.DataArray:
     """Calculates annual mean of an input DataArray, applies a conversion factor if supplied
 
@@ -158,18 +160,21 @@ def calculate_annual_mean(
     """
 
     months = data_array["time.daysinmonth"]
-    
+
     if conversion_factor is None:
-        conversion_factor = 1/365
-    
-    annual_mean = conversion_factor * (months * data_array).groupby("time.year").sum().compute()
+        conversion_factor = 1 / 365
+
+    annual_mean = (
+        conversion_factor * (months * data_array).groupby("time.year").sum().compute()
+    )
     annual_mean.name = data_array.name
     if new_units != "":
         annual_mean.attrs["units"] = new_units
     return annual_mean
 
+
 def calculate_monthly_mean(
-    data_array: xr.DataArray, conversion_factor: float=None
+    data_array: xr.DataArray, conversion_factor: float = None
 ) -> xr.DataArray:
     """Calculates monthly mean of an input DataArray, applies a conversion factor
 
@@ -182,7 +187,7 @@ def calculate_monthly_mean(
     """
 
     months = data_array["time.daysinmonth"]
-    
+
     if conversion_factor is None:
         conversion_factor = 1.0
 
@@ -224,7 +229,7 @@ def post_process_ds(
             fates (bool, optional): is it a FATES run? defaults to True.
             sparse (bool, optional): is it a sparse run? Defaults to True.
             ensemble (bool, optional): is it an ensemble run? Defaults to False
-            filter_nyears (int, optional): How many years to filter at end of simulation. 
+            filter_nyears (int, optional): How many years to filter at end of simulation.
                 Defaults to None.
 
     Returns:
@@ -505,8 +510,10 @@ def create_target_grid(file: str, var: str) -> xr.Dataset:
 
     return target_grid
 
-def apply_to_vars(ds: xr.Dataset, varlist: list[str], func, add_sparse: bool, 
-                  *args, **kwargs) -> xr.Dataset:
+
+def apply_to_vars(
+    ds: xr.Dataset, varlist: list[str], func, add_sparse: bool, *args, **kwargs
+) -> xr.Dataset:
     """Applies a function to each variable in varlist and merges results.
 
     Args:
@@ -523,18 +530,19 @@ def apply_to_vars(ds: xr.Dataset, varlist: list[str], func, add_sparse: bool,
 
     ds_out = xr.Dataset()
     for var in varlist:
-        
+
         var_kwargs = {
             key: (val[var] if isinstance(val, dict) and var in val else val)
             for key, val in kwargs.items()
         }
         ds_out[var] = func(ds[var], *args, **var_kwargs)
-        
+
     if add_sparse:
         ds_out["grid1d_lat"] = ds.grid1d_lat
         ds_out["grid1d_lon"] = ds.grid1d_lon
-    
+
     return ds_out
+
 
 def get_sparse_maps(
     ds: xr.Dataset, sparse_grid: xr.Dataset, varlist: list[str]
@@ -564,7 +572,9 @@ def get_area_means(ds, varlist, var_dict, land_area):
     ds_list = []
     for var in varlist:
         ds_list.append(
-            area_mean(ds[var], var_dict[var]["area_conversion_factor"], land_area).to_dataset(name=var)
+            area_mean(
+                ds[var], var_dict[var]["area_conversion_factor"], land_area
+            ).to_dataset(name=var)
         )
 
     return xr.merge(ds_list)
@@ -575,7 +585,11 @@ def get_sparse_area_means(ds, domain, varlist, var_dict, land_area, biome):
     for var in varlist:
         ds_list.append(
             area_mean_from_sparse(
-                ds[var], biome, domain, var_dict[var]["area_conversion_factor"], land_area
+                ds[var],
+                biome,
+                domain,
+                var_dict[var]["area_conversion_factor"],
+                land_area,
             ).to_dataset(name=var)
         )
 

@@ -24,13 +24,14 @@ _COLS = [
     "#dc0ab4",
     "#b3d4ff",
     "#00bfa0",
-    ]
+]
+
 
 def plot_month_of_max(da, long_name):
-    
+
     models = da.model.values
     num_plots = len(models)
-    
+
     # get the emtpy subplots
     figure, axes = generate_subplots(num_plots)
 
@@ -41,7 +42,7 @@ def plot_month_of_max(da, long_name):
                 ax,
                 da.sel(model=models[idx]),
                 models[idx],
-                'jet',
+                "jet",
                 0.5,
                 12.5,
             )
@@ -53,18 +54,32 @@ def plot_month_of_max(da, long_name):
             axes[0],
             da.sel(model=models[0]),
             models[0],
-            'jet',
+            "jet",
             0.5,
             12.5,
         )
         cbar = figure.colorbar(pcm, ax=axes[0], shrink=0.5, orientation="horizontal")
-    
-    cbar.set_label('Month', size=12, fontweight='bold')
+
+    cbar.set_label("Month", size=12, fontweight="bold")
     cbar.set_ticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
-    cbar.set_ticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
-                     'Sep', 'Oct', 'Nov', 'Dec'])
-    figure.suptitle(f'Month of Max for {long_name}')
-    
+    cbar.set_ticklabels(
+        [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
+        ]
+    )
+    figure.suptitle(f"Month of Max for {long_name}")
+
 
 def plot_global(
     da: xr.DataArray,
@@ -133,7 +148,7 @@ def plot_by_lat(
     var_name: str,
     plot_config: dict,
     land_area: xr.DataArray,
-    conversion_factor: float=None,
+    conversion_factor: float = None,
 ):
     """Plots zonal (by latitude) ILAMB data for each model
 
@@ -169,48 +184,91 @@ def plot_by_lat(
 
     # add latitude-specific ticks/lines
     plt.ylim(-90, 90)
-    plt.grid(True, which='both', axis='y', linestyle='--', linewidth=0.5, color='black', alpha=0.3)
+    plt.grid(
+        True,
+        which="both",
+        axis="y",
+        linestyle="--",
+        linewidth=0.5,
+        color="black",
+        alpha=0.3,
+    )
     plt.tick_params(bottom=False, top=False, left=False, right=False)
 
     # plot models
     for rank, model in enumerate(np.unique(df.model.values)):
         data = df[df.model == model]
-        plt.plot(data[var_name].values, data.lat.values, lw=2, color=_COLS[rank], label=model)
+        plt.plot(
+            data[var_name].values, data.lat.values, lw=2, color=_COLS[rank], label=model
+        )
 
     plt.ylabel("Latitude (º)", fontsize=11)
-    plt.xlabel(f"Annual {plot_config['long_name']} ({plot_config['units']})", fontsize=11)
+    plt.xlabel(
+        f"Annual {plot_config['long_name']} ({plot_config['units']})", fontsize=11
+    )
     plt.title(
-        f"Observed Annual {plot_config['long_name']}" + " by latitude for different data products",
+        f"Observed Annual {plot_config['long_name']}"
+        + " by latitude for different data products",
         fontsize=11,
     )
     plt.legend(loc="upper right")
-    
+
+
 def plot_annual_cycle(da, var, ylabel, units, title):
-    df = pd.DataFrame({
-        "month": np.tile(da.month, len(da.model)),
-        "model": np.repeat(da.model, len(da.month)),
-        var: da.values.flatten()}
+    df = pd.DataFrame(
+        {
+            "month": np.tile(da.month, len(da.model)),
+            "model": np.repeat(da.model, len(da.month)),
+            var: da.values.flatten(),
+        }
     )
-    
+
     # plot
     get_blank_plot()
     plt.xlim(1, 12)
-    plt.xticks(range(1, 13, 1), ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 
-                                 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], fontsize=10)
-    
+    plt.xticks(
+        range(1, 13, 1),
+        [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
+        ],
+        fontsize=10,
+    )
+
     # add gridlines
-    plt.grid(True, which='both', axis='y', linestyle='--', linewidth=0.5, color='black', alpha=0.3)
+    plt.grid(
+        True,
+        which="both",
+        axis="y",
+        linestyle="--",
+        linewidth=0.5,
+        color="black",
+        alpha=0.3,
+    )
     plt.tick_params(bottom=False, top=False, left=False, right=False)
-    
+
     # plot models
     for rank, model in enumerate(np.unique(df.model.values)):
         data = df[df.model == model]
-        plt.plot(data.month.values, data[var].values, lw=2, color=_COLS[rank], label=model)
+        plt.plot(
+            data.month.values, data[var].values, lw=2, color=_COLS[rank], label=model
+        )
 
     plt.xlabel("Month", fontsize=11)
     plt.ylabel(f"{ylabel} ({units})", fontsize=11)
     plt.legend(loc="upper right")
     plt.title(title)
+
 
 def plot_ilamb_var(
     ilamb_dat: xr.Dataset,
@@ -246,25 +304,38 @@ def plot_ilamb_var(
         vlims=vlims,
         diverging_cmap=plot_config["diverging_cmap"],
     )
-    
-    # get the month of max data for just this variable 
+
+    # get the month of max data for just this variable
     da_month = get_model_da(ilamb_dat, f"{var}_month_of_max", plot_config["models"])
-    
+
     # plot month of max
     plot_month_of_max(da_month, plot_config["long_name"])
-    
+
     # plot by latitude
-    plot_by_lat(da_annual, var, {'long_name': plot_config["long_name"], 'units': plot_config["lat_units"]},
-                ilamb_dat.land_area,
-                plot_config['conversion_factor'])
-        
+    plot_by_lat(
+        da_annual,
+        var,
+        {"long_name": plot_config["long_name"], "units": plot_config["lat_units"]},
+        ilamb_dat.land_area,
+        plot_config["conversion_factor"],
+    )
+
     # get the climatology
     da_cycle = get_model_da(ilamb_dat, f"{var}_cycle", plot_config["models"])
-    plot_annual_cycle(da_cycle, f"{var}_cycle", f"Annual Cycle of {plot_config['long_name']}", 
-                      plot_config["lat_units"].replace("yr", "month"),
-                      f"Observed Annual Cycle of {plot_config['long_name']}" + " for different data products")
-    
+    plot_annual_cycle(
+        da_cycle,
+        f"{var}_cycle",
+        f"Annual Cycle of {plot_config['long_name']}",
+        plot_config["lat_units"].replace("yr", "month"),
+        f"Observed Annual Cycle of {plot_config['long_name']}"
+        + " for different data products",
+    )
+
     da_anomaly = get_model_da(ilamb_dat, f"{var}_anomaly", plot_config["models"])
-    plot_annual_cycle(da_anomaly, f"{var}_anomaly", f"{plot_config['long_name']} Anomaly", 
-                      plot_config["lat_units"].replace("yr", "month"),
-                      f"Observed {plot_config['long_name']} Anomaly" + " for different data products")
+    plot_annual_cycle(
+        da_anomaly,
+        f"{var}_anomaly",
+        f"{plot_config['long_name']} Anomaly",
+        plot_config["lat_units"].replace("yr", "month"),
+        f"Observed {plot_config['long_name']} Anomaly" + " for different data products",
+    )

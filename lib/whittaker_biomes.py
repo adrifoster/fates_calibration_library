@@ -1,5 +1,5 @@
-"""Functions to calculate Whittaker biomes globally
-"""
+"""Functions to calculate Whittaker biomes globally"""
+
 import glob
 import functools
 import xarray as xr
@@ -7,8 +7,12 @@ import numpy as np
 import geopandas as gpd
 from shapely.geometry import Point
 import matplotlib
-from fates_calibration_library.analysis_functions import calculate_annual_mean, preprocess
+from fates_calibration_library.analysis_functions import (
+    calculate_annual_mean,
+    preprocess,
+)
 from fates_calibration_library.plotting_functions import generate_subplots, map_function
+
 
 def calc_whittaker_biome_by_hand(temperature: float, precip: float) -> int:
     """Calculates Whittaker biome by hand via input temperature and precipitation
@@ -72,7 +76,9 @@ def get_whittaker_biome_class(
             if len(point) > 0:
                 biome_class[cell] = point.biome_id.values[0]
             else:
-                biome_class[cell] = calc_whittaker_biome_by_hand(temperature[cell], precip[cell])
+                biome_class[cell] = calc_whittaker_biome_by_hand(
+                    temperature[cell], precip[cell]
+                )
 
     return biome_class
 
@@ -113,9 +119,9 @@ def read_in_clm_sim(clm_dir: str):
     Returns:
         xr.Dataset: CLM simulation dataset
     """
-    
+
     data_vars = ["TLAI", "GPP", "TBOT", "RAIN", "SNOW", "area", "landfrac"]
-    
+
     # load full grid CLM simulation at 2degree
     files = sorted(glob.glob(clm_dir + "*h0*"))[-84:]
     clm_sim = xr.open_mfdataset(
@@ -129,6 +135,7 @@ def read_in_clm_sim(clm_dir: str):
     clm_sim["time"] = xr.cftime_range("2007", periods=84, freq="MS", calendar="noleap")
 
     return clm_sim
+
 
 def get_whittaker_biomes(
     clm_dir: str, whit_shp_file: str, whitkey: xr.DataArray
@@ -147,7 +154,7 @@ def get_whittaker_biomes(
     # get data needed to calculate Whittaker biomes
     clm_sim = read_in_clm_sim(clm_dir)
     tbot, prec, gpp = get_global_whittaker_vars(clm_sim)
-    
+
     # reshape arrays
     tbot_reshape = tbot.values.reshape(-1, 1)
     prec_reshape = prec.values.reshape(-1, 1)
@@ -158,7 +165,9 @@ def get_whittaker_biomes(
     whittaker_shapefile.biome_id = np.array([9, 8, 7, 6, 5, 4, 1, 2, 3])
 
     # calculate biome class
-    biome_class = get_whittaker_biome_class(tbot_reshape, prec_reshape, gpp_reshape, whittaker_shapefile)
+    biome_class = get_whittaker_biome_class(
+        tbot_reshape, prec_reshape, gpp_reshape, whittaker_shapefile
+    )
 
     # rehape and turn into a DataSet
     biome_id = biome_class.reshape(np.shape(tbot)[0], np.shape(tbot)[1])
@@ -175,37 +184,55 @@ def get_whittaker_biomes(
 
     return ds_masked
 
+
 def get_biome_palette() -> tuple[dict[float, str], str]:
     """Returns a palette for plotting whittaker biomes
 
     Returns:
        tuple[dict[float, str], str]: color palette, biome names
     """
-    
+
     # set the hue palette as a dict for custom mapping
-    biome_names = ['Ice sheet', 'Tropical rain forest',
-                'Tropical seasonal forest/savanna', 'Subtropical desert',
-                'Temperate rain forest', 'Temperate seasonal forest',
-                'Woodland/shrubland', 'Temperate grassland/desert',
-                'Boreal forest', 'Tundra']
-    colors = ["#ADADC9", "#317A22", "#A09700", "#DCBB50", "#75A95E", "#97B669",
-            "#D16E3F", "#FCD57A", "#A5C790", "#C1E1DD"]
-    
+    biome_names = [
+        "Ice sheet",
+        "Tropical rain forest",
+        "Tropical seasonal forest/savanna",
+        "Subtropical desert",
+        "Temperate rain forest",
+        "Temperate seasonal forest",
+        "Woodland/shrubland",
+        "Temperate grassland/desert",
+        "Boreal forest",
+        "Tundra",
+    ]
+    colors = [
+        "#ADADC9",
+        "#317A22",
+        "#A09700",
+        "#DCBB50",
+        "#75A95E",
+        "#97B669",
+        "#D16E3F",
+        "#FCD57A",
+        "#A5C790",
+        "#C1E1DD",
+    ]
+
     palette = {}
     for i in range(len(colors)):
         palette[float(i)] = colors[i]
-        
+
     return palette, biome_names
 
+
 def plot_whittaker_biomes(whit_ds):
-    
+
     colors, names = get_biome_palette()
     cmap = matplotlib.colors.ListedColormap(list(colors.values()))
-    
+
     figure, axes = generate_subplots(1)
     pcm = map_function(axes[0], whit_ds, "Whittaker Biomes", cmap, -0.5, 9.5)
-    cbar = figure.colorbar(pcm, ax=axes[0], fraction=0.03, orientation='vertical')
-    cbar.set_label('Biome', size=12, fontweight='bold')
+    cbar = figure.colorbar(pcm, ax=axes[0], fraction=0.03, orientation="vertical")
+    cbar.set_label("Biome", size=12, fontweight="bold")
     cbar.set_ticks([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-    cbar.set_ticklabels(names)      
-    
+    cbar.set_ticklabels(names)

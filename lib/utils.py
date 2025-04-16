@@ -1,6 +1,7 @@
-"""Helper methods
-"""
+"""Helper methods"""
+
 import yaml
+
 
 def get_config_file(file_name: str) -> dict:
     """Reads in a YAML config file to a dictionary
@@ -11,11 +12,12 @@ def get_config_file(file_name: str) -> dict:
     Returns:
         dict: dictionary output
     """
-    
+
     with open(file_name, "r") as f:
         config = yaml.safe_load(f)
-    
+
     return config
+
 
 def evaluate_conversion_factor(factor) -> float:
     """Evaluates the conversion factor if it's an equation, otherwise returns the number."""
@@ -29,4 +31,4 @@ def evaluate_conversion_factor(factor) -> float:
             return result
         elif op == "add":
             return sum(operands)
-    return factor 
+    return factor

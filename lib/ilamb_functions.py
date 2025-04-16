@@ -17,6 +17,7 @@ from fates_calibration_library.analysis_functions import (
 from fates_calibration_library.utils import evaluate_conversion_factor
 from fates_calibration_library.surface_data_functions import extract_biome
 
+
 def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
     """Processes ILAMB datasets: reads, converts to annual values, regrids, and saves.
 
@@ -64,9 +65,7 @@ def process_dataset(
     """
 
     # read or compute ILAMB data
-    ilamb_dat, original_file = read_ilamb_data(
-        config_dict, ilamb_dict, attributes
-    )
+    ilamb_dat, original_file = read_ilamb_data(config_dict, ilamb_dict, attributes)
 
     # prepare metadata
     metadata = {
@@ -87,10 +86,10 @@ def process_dataset(
 
     # regrid annual
     regridded_annual = regrid_ilamb_ds(annual_ds, target_grid, attributes["out_var"])
-    if "year" in regridded_annual[attributes['out_var']].dims:
-        sum_annual = regridded_annual[attributes['out_var']].sum(dim="year")
+    if "year" in regridded_annual[attributes["out_var"]].dims:
+        sum_annual = regridded_annual[attributes["out_var"]].sum(dim="year")
     else:
-        sum_annual = regridded_annual[attributes['out_var']] 
+        sum_annual = regridded_annual[attributes["out_var"]]
     regridded_annual = regridded_annual.where(np.abs(sum_annual) > 0.0)
 
     # monthly mean
@@ -98,27 +97,27 @@ def process_dataset(
         ilamb_dat[attributes["in_var"]],
         evaluate_conversion_factor(attributes["time_conversion_factor"]),
     )
-        
+
     # regrided monthly mean
     regridded_monthly = regrid_ilamb_ds(
         monthly_mean.to_dataset(name=f"{attributes['out_var']}_monthly"),
         target_grid,
-        f"{attributes['out_var']}_monthly")
-    
-    sum_monthly = regridded_monthly[f"{attributes['out_var']}_monthly"].sum(dim='month')
+        f"{attributes['out_var']}_monthly",
+    )
+
+    sum_monthly = regridded_monthly[f"{attributes['out_var']}_monthly"].sum(dim="month")
     regridded_monthly = regridded_monthly.where(np.abs(sum_monthly) > 0.0)
-        
 
     # calculate month of maximum value
-    month_of_max = calculate_month_of_max(regridded_monthly[f"{attributes['out_var']}_monthly"]).to_dataset(
-        name=f"{attributes['out_var']}_month_of_max"
-    )
+    month_of_max = calculate_month_of_max(
+        regridded_monthly[f"{attributes['out_var']}_monthly"]
+    ).to_dataset(name=f"{attributes['out_var']}_month_of_max")
 
     # get climatology
     climatology_ds = get_ilamb_climatology(
         regridded_monthly,
-        attributes['out_var'],
-        evaluate_conversion_factor(attributes["area_conversion_factor"])
+        attributes["out_var"],
+        evaluate_conversion_factor(attributes["area_conversion_factor"]),
     )
 
     # return all files combined
@@ -126,7 +125,8 @@ def process_dataset(
 
 
 def get_ilamb_climatology(
-    monthly_mean: xr.DataArray, out_var: str, area_cf) -> xr.Dataset:
+    monthly_mean: xr.DataArray, out_var: str, area_cf
+) -> xr.Dataset:
     """Returns dataset of climatology of the monthly input data
 
     Args:
@@ -137,27 +137,29 @@ def get_ilamb_climatology(
     Returns:
         xr.Dataset: climatology dataset
     """
-    
+
     # sum up to get areas where there is no data
-    sum_monthly = monthly_mean[f"{out_var}_monthly"].sum(dim='month')
-    
+    sum_monthly = monthly_mean[f"{out_var}_monthly"].sum(dim="month")
+
     land_area = monthly_mean.land_area
     land_area = xr.where(np.abs(sum_monthly) > 0.0, land_area, 0.0)
-    
+
     if area_cf is None:
-        area_cf = 1 / land_area.sum(dim=['lat', 'lon']).values
+        area_cf = 1 / land_area.sum(dim=["lat", "lon"]).values
 
     # weight by landarea
     area_weighted = land_area * monthly_mean[f"{out_var}_monthly"]
 
     # calculate area mean
-    climatology = area_cf * area_weighted.sum(dim=['lat', 'lon']).to_dataset(name=f"{out_var}_cycle")
+    climatology = area_cf * area_weighted.sum(dim=["lat", "lon"]).to_dataset(
+        name=f"{out_var}_cycle"
+    )
 
     # calculate anomaly
     climatology_mean = climatology[f"{out_var}_cycle"].mean(dim="month")
-    monthly_anomaly = (
-        climatology[f"{out_var}_cycle"] - climatology_mean
-    ).to_dataset(name=f"{out_var}_anomaly")
+    monthly_anomaly = (climatology[f"{out_var}_cycle"] - climatology_mean).to_dataset(
+        name=f"{out_var}_anomaly"
+    )
 
     climatology_ds = xr.merge([climatology, monthly_anomaly])
 
@@ -185,7 +187,9 @@ def build_file_paths(top_dir, sub_dirs, model, filenames):
 
 
 def read_ilamb_data(
-    config: dict, ilamb_dict: dict, attributes: dict, 
+    config: dict,
+    ilamb_dict: dict,
+    attributes: dict,
 ) -> tuple[xr.Dataset, str]:
     """Handles reading or computing different types of ILAMB datasets
 
@@ -214,14 +218,14 @@ def read_ilamb_data(
             ilamb_dict[f"{attributes['model']}_SH"],
         )
         ilamb_dat = get_ef_ds(
-            config['top_dir'],
+            config["top_dir"],
             attributes["in_var"],
             le_dict,
             sh_dict,
             filter_options,
         )
         original_file = build_file_paths(
-            config['top_dir'],
+            config["top_dir"],
             [le_dict["sub_dir"], sh_dict["sub_dir"]],
             attributes["model"],
             [le_dict["filename"], sh_dict["filename"]],
@@ -233,14 +237,14 @@ def read_ilamb_data(
             ilamb_dict[f"{attributes['model']}_FSR"],
         )
         ilamb_dat = get_albedo_ds(
-            config['top_dir'],
+            config["top_dir"],
             attributes["in_var"],
             rsds_dict,
             rsus_dict,
             filter_options,
         )
         original_file = build_file_paths(
-            config['top_dir'],
+            config["top_dir"],
             [rsds_dict["sub_dir"], rsus_dict["sub_dir"]],
             attributes["model"],
             [rsds_dict["filename"], rsus_dict["filename"]],
@@ -249,7 +253,7 @@ def read_ilamb_data(
     else:
         # create the file_info dictionary
         file_info = {
-            "top_dir": config['top_dir'],
+            "top_dir": config["top_dir"],
             "sub_dir": attributes["sub_dir"],
             "model": attributes["model"],
             "filename": attributes["filename"],
@@ -260,10 +264,14 @@ def read_ilamb_data(
 
         # construct original file name
         original_file = build_file_paths(
-            config['top_dir'], attributes["sub_dir"], attributes["model"], attributes["filename"]
+            config["top_dir"],
+            attributes["sub_dir"],
+            attributes["model"],
+            attributes["filename"],
         )
 
     return ilamb_dat, original_file
+
 
 def get_ilamb_ds(
     file_info: Dict[str, str], in_var: str, filter_options: Dict[str, Optional[float]]
@@ -568,10 +576,9 @@ def regrid_ilamb_ds(
         xr.Dataset: output dataset
     """
 
-    
     # fill NAs with 0
     ds[var] = ds[var].fillna(0)
-    
+
     # regrid
     regridder = xe.Regridder(ds, target_grid, method)
     ds_regrid = regridder(ds)
@@ -598,7 +605,9 @@ def extract_land_area(land_area_file: str) -> xr.Dataset:
     return land_area
 
 
-def compile_ilamb_datasets(out_dir: str, ilamb_dict: dict, land_area: xr.DataArray) -> xr.Dataset:
+def compile_ilamb_datasets(
+    out_dir: str, ilamb_dict: dict, land_area: xr.DataArray
+) -> xr.Dataset:
     """Compiles all regridded ILAMB datasets, computes average and variance over years,
     and merges into a single dataset
 
@@ -622,9 +631,9 @@ def compile_ilamb_datasets(out_dir: str, ilamb_dict: dict, land_area: xr.DataArr
         compile_variable(out_var, models, out_dir)
         for out_var, models in var_to_models.items()
     ]
-    
+
     ds_out = xr.merge(compiled_data)
-    ds_out['land_area'] = land_area
+    ds_out["land_area"] = land_area
 
     return ds_out
 
@@ -644,7 +653,11 @@ def compile_variable(var: str, models: list[str], out_dir: str) -> xr.Dataset:
     for model in models:
         file_name = os.path.join(out_dir, f"{model}_{var.upper()}.nc")
         ds = xr.open_dataset(file_name)
-        processed_ds = get_average_and_iav(ds, var) if var != "biomass" else ds[var].to_dataset(name=var)
+        processed_ds = (
+            get_average_and_iav(ds, var)
+            if var != "biomass"
+            else ds[var].to_dataset(name=var)
+        )
         processed_ds[f"{var}_cycle"] = ds[f"{var}_cycle"]
         processed_ds[f"{var}_month_of_max"] = ds[f"{var}_month_of_max"]
         processed_ds[f"{var}_anomaly"] = ds[f"{var}_anomaly"]
@@ -793,8 +806,14 @@ def filter_df(df: pd.DataFrame, filter_vars: list[str], tol: float) -> pd.DataFr
 
     return df
 
-def extract_ilamb_obs(obs_ds: xr.Dataset, grids: pd.DataFrame, biome: xr.DataArray, 
-                      ilamb_config: dict, threshold_dict: dict):
+
+def extract_ilamb_obs(
+    obs_ds: xr.Dataset,
+    grids: pd.DataFrame,
+    biome: xr.DataArray,
+    ilamb_config: dict,
+    threshold_dict: dict,
+):
     """Extract ILAMB and Whittaker biomes for a set of lat/lons
 
     Args:
@@ -809,15 +828,25 @@ def extract_ilamb_obs(obs_ds: xr.Dataset, grids: pd.DataFrame, biome: xr.DataArr
     Returns:
         _type_: _description_
     """
-    
+
     all_df = []
     for _, attributes in ilamb_config.items():
         # extract all ILAMB data
-        all_df.append(extract_obs(obs_ds, attributes['var'], attributes['models'], grids.lats.values, grids.lons.values))
-    
+        all_df.append(
+            extract_obs(
+                obs_ds,
+                attributes["var"],
+                attributes["models"],
+                grids.lats.values,
+                grids.lons.values,
+            )
+        )
+
     # also add in whittaker biome
-    all_df.append(extract_biome(biome, grids.lats.values, grids.lons.values, grids.pft.values))
-    out_df = reduce(lambda x, y: pd.merge(x, y, on=['lat', 'lon']), all_df)
+    all_df.append(
+        extract_biome(biome, grids.lats.values, grids.lons.values, grids.pft.values)
+    )
+    out_df = reduce(lambda x, y: pd.merge(x, y, on=["lat", "lon"]), all_df)
 
     # return filtered df
-    return filter_df(out_df, threshold_dict['filter_vars'], threshold_dict['tol'])
+    return filter_df(out_df, threshold_dict["filter_vars"], threshold_dict["tol"])
