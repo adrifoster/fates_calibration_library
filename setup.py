@@ -13,7 +13,7 @@ setup(
     long_description_content_type="text/markdown",
     author="Adrianna Foster",
     author_email="afoster@ucar.edu",
-    url="https://github.com/adrifoster/fates_calibration_scripts",
+    url="https://github.com/adrifoster/fates_calibration_library",
     packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",

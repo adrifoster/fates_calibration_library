@@ -135,12 +135,8 @@ def calculate_month_of_max(monthly_mean: xr.DataArray) -> xr.DataArray:
         xr.DataArray: output maximum month
     """
 
-    # get sum so that we can get rid of anything less than 0.0
-    month_sum = monthly_mean.sum(dim="month")
-
     # calculate the month of the maximum value
     month_of_max = monthly_mean.idxmax(dim="month")
-    # month_of_max = month_of_max.where(np.abs(month_sum) > 0.0)
 
     return month_of_max
 
@@ -265,6 +261,68 @@ def post_process_ds(
     ds = ds.sel(time=slice(f"{years[0]}-01-01", f"{years[1]}-12-31"))
 
     return ds
+
+
+def post_process_ensemble(
+    run_dict: dict, data_vars: list[str], biome: xr.DataArray
+) -> list[str]:
+    """Create single history files for each set of history files in an ensemble.
+
+    Args:
+        run_dict (dict): Dictionary describing aspects of the run:
+            top_dir (str): path to top directory with archived ensemble history output
+            postp_dir (str): directory where post-processed files will be placed
+            years (list[int]): start and end year of simulation
+            clobber (bool): whether or not to overwrite files. Defaults to False.
+            fates (bool, optional): is it a FATES run? defaults to True.
+            sparse (bool, optional): is it a sparse run? Defaults to True.
+            ensemble (bool, optional): is it an ensemble run? Defaults to False.
+            filter_nyears (int, optional): How many years to filter at end of simulation.
+                Defaults to None.
+        data_vars (list[str]): list of variables to read in
+        biome (xr.DataArray): Whittaker biome dataset
+
+    Returns:
+        list[str]: list of ensemble keys successfully post-processed and written out
+    """
+
+    # this is true
+    run_dict["ensemble"] = True
+
+    # create output directory if it doesn't exist
+    os.makedirs(run_dict["postp_dir"], exist_ok=True)
+
+    keys_finished = []
+    dirs = sorted(os.listdir(run_dict["top_dir"]))
+
+    for hist_dir in dirs:
+        ensemble = hist_dir.split("_")[-1]
+        out_file = os.path.join(run_dict["postp_dir"], f"{hist_dir}.nc")
+
+        # skip if file exists and clobber is False
+        if os.path.isfile(out_file) and not run_dict.get("clobber", False):
+            print(f"File {out_file} for ensemble {ensemble} exists, skipping")
+            keys_finished.append(ensemble)
+            continue
+
+        # create history file for this ensemble
+        ds_out = post_process_ds(
+            os.path.join(run_dict["top_dir"], dir, "lnd", "hist"),
+            data_vars,
+            biome,
+            run_dict["years"],
+            run_dict=run_dict,
+        )
+        # write to file
+        if ds_out is not None:
+            if (
+                len(ds_out.time)
+                == (run_dict["years"][1] - run_dict["years"][0] + 1) * 12
+            ):
+                ds_out.to_netcdf(out_file)
+                keys_finished.append(ensemble)
+
+    return keys_finished
 
 
 def get_clm_ds(
