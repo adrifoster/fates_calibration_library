@@ -6,6 +6,7 @@ import os
 from datetime import date
 import xarray as xr
 import numpy as np
+import pandas as pd
 
 
 def month_difference(da1: xr.DataArray, da2: xr.DataArray) -> xr.DataArray:
@@ -324,7 +325,34 @@ def post_process_ensemble(
 
     return keys_finished
 
+def check_ensembles_run(key_df: pd.DataFrame, keys_finished: list[str]) -> list[int]:
+    """Checks a list of ensemble keys run against a list of ensemble keys that were
+    supposed to run and reports any missing ensemble members
 
+    Args:
+        key_df (pd.DataFrame): dataframe with ensemble keys to run
+        keys_finished (list[str]): list of ensemble keys finished
+
+    Returns:
+        list[int]: list of missing keys
+    """
+
+    # get set of keys to run in ensemble
+    expected = set(np.unique(key_df.key))
+    
+    # get set of keys actually run
+    ran = set([int(k) for k in keys_finished])
+    
+    # check for missing keys
+    missing = expected - ran
+    if not missing:
+        print("All ensemble members were run.")
+    else:
+        print("The following ensemble members were not run:")
+        for m in sorted(missing):
+            print(m)
+        return list(missing)
+    
 def get_clm_ds(
     files: list[str],
     data_vars: list[str],

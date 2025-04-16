@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+#==============================================================================
+#
+# Script Name: nc_to_mesh
+# Description: This script creates a mesh file from an input netcdf land mask file
+# 
+# Usage: ./nc_to_mesh.sh path/to/netcdf/file.nc [optional/output/dir]
+#
+# Arguments:
+#   <nc_file> Path to the input netcdf land mask file
+#   <output_dir> optional path to place new files. defaults to current working directory
+#
+#
+# Author: Adrianna Foster
+# Date: 2025-04-16
+# Version: 2.0
+#
+#==============================================================================
+
+#--------------------------#
+# User-defined parameters  #
+#--------------------------#
+
+ESMF_SCRIP2UNSTRUCT="/glade/u/apps/derecho/23.09/spack/opt/spack/esmf/8.6.0/cray-mpich/8.1.27/oneapi/2023.2.1/7haa/bin/ESMF_Scrip2Unstruct"
+
+#--------------------------#
+# Validate input           #
+#--------------------------#
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "Usage: $0 path/to/netcdf/file.nc [optional/output/dir]"
+  exit 1
+fi
+
+
+nc_file="$1"
+output_dir="${2:-$(pwd)}"
+
+if [[ ! -f "$nc_file" ]]; then
+  echo "Error: File '$nc_file' does not exist."
+  exit 1
+fi
+
+mkdir -p "$output_dir"
+
+#--------------------------#
+# File setup               #
+#--------------------------#
+
+abs_nc_file="$(realpath "$nc_file")"
+base_filename="$(basename "$abs_nc_file" .nc)"
+
+mesh_file="${output_dir}/${base_filename}_mesh.nc"
+
+# make a directory to put extra files in
+extra_files_dir="${output_dir}/extra_files_${base_filename}"
+mkdir -p "$extra_files_dir"
+
+#--------------------------#
+# Load required modules    #
+#--------------------------#
+
+module load nco
+
+#--------------------------#
+# Run conversion steps     #
+#--------------------------#
+
+echo "Generating SCRIP file from $nc_file..."
+ncks --rgr infer --rgr scrip=scrip.nc ${nc_file} foo.nc
+
+echo "Creating mesh file..."
+"$ESMF_SCRIP2UNSTRUCT" scrip.nc "$mesh_file" 0
+
+#--------------------------#
+# Organize extra files     #
+#--------------------------#
+
+echo "Moving intermediate files to $extra_files_dir..."
+mv foo.nc "$extra_files_dir"
+mv PET* "$extra_files_dir" 2>/dev/null || true
+mv scrip.nc "$extra_files_dir"
+
+echo "Done. Mesh file: $mesh_file"

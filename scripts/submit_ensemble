@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#PBS -N oaat_submit_clm
+#PBS -N submit_ensemble
 #PBS -q develop
 #PBS -l select=1:mem=1G
 #PBS -l walltime=5:00:00
@@ -10,6 +10,21 @@
 #PBS -m abe
 #PBS -M afoster@ucar.edu
 
-conf=/glade/work/afoster/FATES_calibration/config_files/ctsm_sp_oaat_btran.config
+RUN_ENSEMBLE_SCRIPT="/glade/work/afoster/FATES_calibration/fates_calibration_library/scripts/run_ensemble"
 
-/glade/work/afoster/FATES_calibration/CLM5PPE/jobscripts/run_ens.sh ${conf}
+# ------------------ #
+# Check config input #
+# ------------------ #
+
+if [[ -z "${CONF:-}" ]]; then
+  echo "Error: CONF variable not set. Use: qsub -v CONF=/path/to/config submit_oaat"
+  exit 1
+fi
+
+echo "Using config: $CONF"
+
+# ------------------ #
+# Submit ensemble    #
+# ------------------ #
+
+"$RUN_ENSEMBLE_SCRIPT" "$CONF"
