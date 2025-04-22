@@ -4,7 +4,8 @@ ASA:
   annual_units: 0-1
   global_units: 0-1
   cmap: jet
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Albedo
 
 GPP:
   time_conversion_factor: 86400
@@ -13,6 +14,7 @@ GPP:
   global_units: PgC yr$^{-1}$
   cmap: YlGn
   diverging_cmap: False
+  long_name: GPP
 
 LAI:
   time_conversion_factor: null
@@ -21,6 +23,7 @@ LAI:
   global_units: m$^2$ m$^{-2}$
   cmap: YlGn
   diverging_cmap: False 
+  long_name: LAI
 
 EFLX_LH_TOT:
   time_conversion_factor: null
@@ -28,7 +31,8 @@ EFLX_LH_TOT:
   annual_units: W m$^{-2}$
   global_units: W m$^{-2}$
   cmap: YlGnBu
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Latent Heat Flux
 
 FSH:
   time_conversion_factor: null
@@ -36,7 +40,8 @@ FSH:
   annual_units: W m$^{-2}$
   global_units: W m$^{-2}$
   cmap: jet
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Sensible Heat Flux
 
 EF:
   time_conversion_factor: null
@@ -44,7 +49,8 @@ EF:
   annual_units: W m$^{-2}$
   global_units: W m$^{-2}$
   cmap: BrBG
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Evaporative Fraction
 
 SOILWATER_10CM:
   time_conversion_factor: null
@@ -52,7 +58,8 @@ SOILWATER_10CM:
   annual_units: kgH$_2$O m$^{-2}$
   global_units: TtH$_2$O yr$^{-1}$
   cmap: Blues
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Surface Soil Water
 
 FSR:
   time_conversion_factor: null
@@ -60,7 +67,8 @@ FSR:
   annual_units: W m$^{-2}$
   global_units: W m$^{-2}$
   cmap: jet
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Upward Shortwave Radiation Flux
 
 FSA:
   time_conversion_factor: null
@@ -68,7 +76,8 @@ FSA:
   annual_units: W m$^{-2}$
   global_units: W m$^{-2}$
   cmap: jet
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Net Shortwave Radiation Flux
 
 FIRE:
   time_conversion_factor: null
@@ -76,7 +85,8 @@ FIRE:
   annual_units: W m$^{-2}$
   global_units: W m$^{-2}$
   cmap: jet
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Upward Longwave Radiation Flux
 
 RLNS:
   time_conversion_factor: null
@@ -84,7 +94,8 @@ RLNS:
   annual_units: W m$^{-2}$
   global_units: W m$^{-2}$
   cmap: jet
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Net Longwave Radiation Flux
 
 RN:
   time_conversion_factor: null
@@ -92,21 +103,24 @@ RN:
   annual_units: W m$^{-2}$
   global_units: W m$^{-2}$
   cmap: jet
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Net Radiation
 
 TV:
   time_conversion_factor: null
   area_conversion_factor: null
-  annual_units: W m$^{-2}$
-  global_units: W m$^{-2}$
+  annual_units: K
+  global_units: K
   cmap: jet
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Vegetation Temperature
 
 BTRANMN:
   time_conversion_factor: null
   area_conversion_factor: null
-  annual_units: W m$^{-2}$
-  global_units: W m$^{-2}$
+  annual_units: 0-1
+  global_units: 0-1
   cmap: BrBG
-  diverging_cmap: False 
+  diverging_cmap: False
+  long_name: Minimum BTRAN
 

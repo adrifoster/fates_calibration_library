@@ -6,6 +6,7 @@ import pandas as pd
 import xarray as xr
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.mpl.geocollection import GeoQuadMesh
@@ -44,6 +45,45 @@ _PFT_COLS = [
     "#BCB06F",
     "#9C9478",
 ]
+
+# custom fill colors and labels for parameter categories
+_CATEGORY_COLORS = {
+    'hydrology': '#104E8B',
+    'biophysics': '#8B008B',
+    'stomatal': '#008B00',
+    'biogeochemistry': '#8B5A2B',
+    'land use': '#FFA500',
+    'fire': '#B22222'
+}
+
+_CATEGORY_LABELS = {
+    'hydrology': 'Hydrology',
+    'biophysics': 'Biophysics',
+    'stomatal': 'Stomatal Conductance & \nPhotosynthesis',
+    'biogeochemistry': 'Biogeochemistry',
+    'land use': 'Land Use',
+    'fire': 'Fire'
+}
+
+_SUBCATEGORY_LABELS = {
+        'fire': 'Fire',
+        'land use': 'Land use',
+        'allocation': 'Allocation',
+        'allometry': 'Allometry',
+        'decomposition': 'Decomposition',
+        'mortality': 'Mortality',
+        'nutrient uptake': 'Nutrient uptake',
+        'phenology': 'Phenology',
+        'recruitment': 'Recruitment',
+        'respiration': 'Respiration',
+        'vegetation dynamics': 'Vegetation dynamics',
+        'acclimation': 'Acclimation',
+        'photosynthesis': 'Photosynthesis',
+        'vegetation water': 'Vegetation water',
+        'latent': 'Sensible and latent heat',
+        'radiation': 'Radiation',
+        'soil water': 'Soil hydraulics'
+}
 
 
 def plot_zonal_mean_diff(
@@ -840,6 +880,173 @@ def plot_pft_grids(ds: xr.Dataset, pft_names: list[str], title: str):
     cbar.set_ticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
     cbar.set_ticklabels([pft.replace("_", " ") for pft in pft_names])
     plt.title(title)
+    
+def plot_oaat_params(param_dat: pd.DataFrame, model: str):
+    """Plots a column graph of number of parameters in OAAT ensemble
+
+    Args:
+        param_dat (pd.DataFrame): data frame with information about parameters
+        model (str): model name for title
+    """
+    
+    # count up totals, update names of subcategory
+    param_counts_total = (param_dat.groupby(['category', 'subcategory']).size().reset_index(name='num'))
+    param_counts_total['subcategory_label'] = param_counts_total['subcategory'].map(_SUBCATEGORY_LABELS)
+
+    # re-order subcategory
+    subcategory_order = ['Fire', 'Land use', 'Allocation', 'Allometry', 'Decomposition',
+                         'Mortality', 'Nutrient uptake', 'Phenology', 'Recruitment',
+                         'Respiration', 'Vegetation dynamics', 'Acclimation',
+                         'Photosynthesis', 'Vegetation water', 'Sensible and latent heat', 'Radiation',
+                         'Soil hydraulics']
+    subcategory_order.reverse()
+
+    plt.figure(figsize=(10, 8))
+    sns.set_theme(style="whitegrid")
+    
+    ax = sns.barplot(
+        data=param_counts_total,
+        y='subcategory_label',
+        x='num',
+        hue='category',
+        palette=_CATEGORY_COLORS,
+        order=subcategory_order
+    )
+    
+    ax.set_xlabel('Number of Parameters')
+    ax.set_ylabel('')
+    ax.set_title(f'{model} Parameters')
+    
+    handles, labels = ax.get_legend_handles_labels()
+    new_labels = [_CATEGORY_LABELS[label] for label in labels]
+    ax.legend(
+        handles=handles,
+        labels=new_labels,
+        title=None,
+        loc='lower center',
+        bbox_to_anchor=(0.5, -0.25),
+        ncol=2
+    )
+    
+    plt.tight_layout()
+
+def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units):
+    
+    default_sim = ds.sel(ensemble=default_ind).sel(summation_var=sum_var)
+    sumvar_ds = ds.where(ds.ensemble > 0, drop=True).sel(summation_var=sum_var)
+    sumvar_ds = sumvar_ds.where(sumvar_ds.sum_diff > 0.0)
+    
+    get_blank_plot()
+    plt.axhline(y=default_sim[variable].mean().values, color='k', linestyle='--', linewidth=1)
+    
+    plt.grid(
+        True,
+        which="both",
+        axis="y",
+        linestyle="--",
+        linewidth=0.5,
+        color="black",
+        alpha=0.3,
+    )
+    
+    cats = np.unique(sumvar_ds.category.dropna(dim='ensemble'))
+    for category in cats:
+        sub = sumvar_ds.where(sumvar_ds.category == category)
+        plt.scatter(sub.ensemble, sub[variable], alpha=0.5, s=20,
+                    color=_CATEGORY_COLORS[category], label=category)
+    
+    
+    handles, labels = plt.gca().get_legend_handles_labels()
+    new_labels = [_CATEGORY_LABELS[label] for label in labels]
+    plt.legend(
+        handles=handles,
+        labels=new_labels,
+        title=None,
+        loc='lower center',
+        bbox_to_anchor=(0.5, -0.31),
+        ncol=2
+    )
+    plt.xlabel('Ensemble Member')
+    plt.ylabel(f"{ylabel} ({units})")
+    
+def plot_top_n(ds, default, variable, ylabel, units):
+    
+    plt.figure(figsize=(10, 6))
+
+    # Loop through the rows of the sorted dataframe
+    for _, row in ds.iterrows():
+    
+        # get the color for the current category
+        category_color = _CATEGORY_COLORS.get(row['category'], '#000000')
+        
+        # Line connecting min and max GPP
+        plt.plot(
+            [row['min_val'], row['max_val']],
+            [row['parameter_name'], row['parameter_name']],
+            color=category_color,
+            linewidth=1,
+            zorder=1
+        )
+
+    # Plot max GPP values as filled circles with category color
+    plt.scatter(
+        ds['max_val'],
+        ds['parameter_name'],
+        c=ds['category'].map(_CATEGORY_COLORS),
+        label=None,
+        zorder=2
+    )
+    
+    # Plot min GPP values as open circles with category color
+    plt.scatter(
+        ds['min_val'],
+        ds['parameter_name'],
+        facecolors='none',
+        edgecolors=ds['category'].map(_CATEGORY_COLORS),
+        label=None,
+        zorder=2
+    )
+    
+    plt.axvline(x=default[variable].mean().values, color='k', linestyle='--', linewidth=1)
+    
+    # Create custom legend handles for categories
+    category_handles = [
+        mlines.Line2D([], [], marker='o', color='w', markerfacecolor=color, markersize=10, label=category)
+        for category, color in _CATEGORY_COLORS.items()
+    ]
+    max_value_handle = mlines.Line2D([], [], marker='o', color='w', markerfacecolor='black', 
+                                     markersize=9, label='Max Value')
+    min_value_handle = mlines.Line2D([], [], marker='o', color='w', markerfacecolor='none',
+                                     markeredgecolor='black',
+                                     markersize=8, markeredgewidth=1, label='Min Value')
+    
+    default_line_handle = mlines.Line2D(
+        [0], [0], color='black', linestyle='--', linewidth=1, label='Default Value'
+    )
+    
+    # Combine the category legend and the min/max markers into one legend
+    handles = [max_value_handle, min_value_handle, default_line_handle] + category_handles
+    labels = ['Max parameter', 'Min parameter', 'Default'] + [_CATEGORY_LABELS[label] for label in list(_CATEGORY_COLORS.keys())]
+    
+    handles = handles[:3] + [mlines.Line2D([], [], color='white')] + handles[3:]
+    labels = labels[:3] + [''] + labels[3:]
+    
+    plt.legend(
+        handles=handles,
+        labels=labels,
+        loc='upper left',
+        bbox_to_anchor=(1.05, 1),
+        frameon=False
+    )
+    
+    plt.xlabel(f'{ylabel} ({units})')
+    plt.ylabel('Parameter')
+    
+    # Invert the Y-axis so the top differences appear at the top
+    plt.gca().invert_yaxis()
+    
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
 
 
 # def plot_mean_var(obs_ds, obs_var, name, units, points, cmap, pft="all"):

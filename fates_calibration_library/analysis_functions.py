@@ -162,7 +162,7 @@ def calculate_annual_mean(
         conversion_factor = 1 / 365
 
     annual_mean = (
-        conversion_factor * (months * data_array).groupby("time.year").sum().compute()
+        conversion_factor * (months * data_array).groupby("time.year").sum()
     )
     annual_mean.name = data_array.name
     if new_units != "":
@@ -225,7 +225,7 @@ def post_process_ds(
         run_dict (dict, optional): Dictionary describing aspects of the run:
             fates (bool, optional): is it a FATES run? defaults to True.
             sparse (bool, optional): is it a sparse run? Defaults to True.
-            ensemble (bool, optional): is it an ensemble run? Defaults to False
+            ensemble (int, optional): ensemble member. Default to None.
             filter_nyears (int, optional): How many years to filter at end of simulation.
                 Defaults to None.
 
@@ -277,7 +277,7 @@ def post_process_ensemble(
             clobber (bool): whether or not to overwrite files. Defaults to False.
             fates (bool, optional): is it a FATES run? defaults to True.
             sparse (bool, optional): is it a sparse run? Defaults to True.
-            ensemble (bool, optional): is it an ensemble run? Defaults to False.
+            ensemble (int, optional): ensemble member. Default to None.
             filter_nyears (int, optional): How many years to filter at end of simulation.
                 Defaults to None.
         data_vars (list[str]): list of variables to read in
@@ -287,9 +287,6 @@ def post_process_ensemble(
         list[str]: list of ensemble keys successfully post-processed and written out
     """
 
-    # this is true
-    run_dict["ensemble"] = True
-
     # create output directory if it doesn't exist
     os.makedirs(run_dict["postp_dir"], exist_ok=True)
 
@@ -297,18 +294,19 @@ def post_process_ensemble(
     dirs = sorted(os.listdir(run_dict["top_dir"]))
 
     for hist_dir in dirs:
-        ensemble = hist_dir.split("_")[-1]
+        ensemble = int(hist_dir.replace(run_dict['tag'], ''))
+        run_dict['ensemble'] = ensemble
         out_file = os.path.join(run_dict["postp_dir"], f"{hist_dir}.nc")
 
         # skip if file exists and clobber is False
         if os.path.isfile(out_file) and not run_dict.get("clobber", False):
-            print(f"File {out_file} for ensemble {ensemble} exists, skipping")
+            print(f"File {out_file} for ensemble member {ensemble} exists, skipping")
             keys_finished.append(ensemble)
             continue
 
         # create history file for this ensemble
         ds_out = post_process_ds(
-            os.path.join(run_dict["top_dir"], dir, "lnd", "hist"),
+            os.path.join(run_dict["top_dir"], hist_dir, "lnd", "hist"),
             data_vars,
             biome,
             run_dict["years"],
@@ -322,8 +320,19 @@ def post_process_ensemble(
             ):
                 ds_out.to_netcdf(out_file)
                 keys_finished.append(ensemble)
-
+                
+    # also write out default simulation
+    tag = '_'.join(dirs[0].split('_')[:-1])
+    out_file = os.path.join(run_dict["postp_dir"], f"{tag}_000.nc")
+    if os.path.isfile(out_file) and not run_dict.get("clobber", False):
+        print(f"File {out_file} for default simulation exists, skipping")
+    else:
+        ds_default = post_process_ds(os.path.join(run_dict['default_dir'], "lnd", "hist"),
+                                        data_vars, biome,run_dict["years"], run_dict=run_dict)
+        ds_default["ensemble"] = 0
+        ds_default.to_netcdf(out_file)
     return keys_finished
+
 
 def check_ensembles_run(key_df: pd.DataFrame, keys_finished: list[str]) -> list[int]:
     """Checks a list of ensemble keys run against a list of ensemble keys that were
@@ -339,10 +348,10 @@ def check_ensembles_run(key_df: pd.DataFrame, keys_finished: list[str]) -> list[
 
     # get set of keys to run in ensemble
     expected = set(np.unique(key_df.key))
-    
+
     # get set of keys actually run
     ran = set([int(k) for k in keys_finished])
-    
+
     # check for missing keys
     missing = expected - ran
     if not missing:
@@ -352,7 +361,8 @@ def check_ensembles_run(key_df: pd.DataFrame, keys_finished: list[str]) -> list[
         for m in sorted(missing):
             print(m)
         return list(missing)
-    
+
+
 def get_clm_ds(
     files: list[str],
     data_vars: list[str],
@@ -368,7 +378,7 @@ def get_clm_ds(
         run_dict (dict, optional): Dictionary describing aspects of the run:
             fates (bool, optional): is it a FATES run? defaults to True.
             sparse (bool, optional): is it a sparse run? Defaults to True.
-            ensemble (bool, optional): is it an ensemble run? Defaults to False
+            ensemble (int, optional): ensemble member. Defaults to None
 
     Returns:
         xr.Dataset: output dataset
@@ -445,8 +455,8 @@ def get_clm_ds(
         for extra in extras:
             ds[extra] = ds0[extra]
 
-    if run_dict.get("enemble", False):
-        ds["ensemble"] = os.path.basename(files[0]).split("_")[-1]
+    if run_dict.get("ensemble", None) is not None:
+        ds["ensemble"] = run_dict['ensemble']
 
     ds.attrs["Date"] = str(date.today())
     ds.attrs["Original"] = files[0]
@@ -523,8 +533,86 @@ def area_mean(da: xr.DataArray, cf, land_area: xr.DataArray) -> xr.DataArray:
     return weighted_mean
 
 
+def compile_global_ensemble(run_dict, out_vars, var_dict, sparse_grid, sparse_land_area,
+                            global_land_area):
+
+    # read in ensemble and re-chunk for faster analysis
+    files = sorted([os.path.join(run_dict['postp_dir'], f) for f in os.listdir(run_dict['postp_dir'])])
+    ensemble_ds = xr.open_mfdataset(
+        files, combine="nested", concat_dim=["ensemble"], parallel=True
+    )
+    ensemble_ds = ensemble_ds.chunk({"gridcell": 20, "ensemble": 20, "time": 20})
+
+    # calculate annual and monthly means
+    annual_means = apply_to_vars(
+        ensemble_ds,
+        out_vars,
+        func=calculate_annual_mean,
+        add_sparse=True,
+        conversion_factor={
+            var: var_dict[var]["time_conversion_factor"] for var in out_vars
+        },
+        new_units={var: var_dict[var]["annual_units"] for var in out_vars},
+    )
+
+    monthly_means = apply_to_vars(
+        ensemble_ds,
+        out_vars,
+        func=calculate_monthly_mean,
+        add_sparse=True,
+        conversion_factor={
+            var: var_dict[var]["time_conversion_factor"] for var in out_vars
+        },
+    )
+
+    # remap annual means to whole globe
+    annual_maps = get_sparse_maps(annual_means.mean(dim='year'), 
+                                  sparse_grid, out_vars, ensemble=True)
+
+    # calculate zonal means (i.e. by latitude)
+    zonal_means = apply_to_vars(
+        annual_maps,
+        out_vars,
+        func=calculate_zonal_mean,
+        add_sparse=False,
+        land_area=global_land_area,
+        conversion_factor={
+            var: var_dict[var]["area_conversion_factor"] for var in out_vars
+        },
+    )
+    
+    biome = ensemble_ds.isel(ensemble=0).biome.drop_vars('ensemble')
+    
+    # get climatology
+    climatology = get_sparse_area_means(
+        monthly_means, "global", out_vars, var_dict, sparse_land_area, biome
+    )
+
+    # get area means
+    area_means = get_sparse_area_means(
+        annual_means, "global", out_vars, var_dict, sparse_land_area, biome
+    )
+    
+    # get mean and iav of area means and concat
+    area_means_mean = area_means.mean(dim='year')
+    area_means_iav = area_means.var(dim='year')
+    
+    area_means_out = xr.concat([area_means_mean, area_means_iav], dim="summation_var", data_vars="all")
+    area_means_out = area_means_out.assign_coords(summation_var=("summation_var", ['mean', 'iav']))
+    
+    # write to files
+    annual_maps.to_netcdf(os.path.join(run_dict['out_dir'], 
+                                       f'{run_dict["ensemble_name"]}_annual_maps.nc'))
+    zonal_means.to_netcdf(os.path.join(run_dict['out_dir'], 
+                                       f'{run_dict["ensemble_name"]}_zonal_means.nc'))
+    climatology.to_netcdf(os.path.join(run_dict['out_dir'], 
+                                       f'{run_dict["ensemble_name"]}_climatology.nc'))
+    area_means_out.to_netcdf(os.path.join(run_dict['out_dir'], 
+                                       f'{run_dict["ensemble_name"]}_area_means.nc'))
+
+
 def global_from_sparse(
-    sparse_grid: xr.Dataset, da: xr.DataArray, ds: xr.Dataset
+    sparse_grid: xr.Dataset, da: xr.DataArray, ds: xr.Dataset, ensemble: bool = False
 ) -> xr.DataArray:
     """Creates a global map from an input sparse grid in a "paint by numbers" method
 
@@ -532,10 +620,15 @@ def global_from_sparse(
         sparse_grid (xr.Dataset): input sparse grid cluster file
         da (xr.DataArray): input data array to change to global
         ds (xr.Dataset): sparse grid dataset
+        ensemble (bool): is the dataset an ensemble. Defaults to False.
 
     Returns:
         xr.DataArray: output global data array
     """
+
+    # grab only one ensemble member to remap
+    if ensemble:
+        ds = ds.isel(ensemble=0)
 
     # create empty array
     out = np.zeros(sparse_grid.cclass.shape) + np.nan
@@ -631,7 +724,7 @@ def apply_to_vars(
 
 
 def get_sparse_maps(
-    ds: xr.Dataset, sparse_grid: xr.Dataset, varlist: list[str]
+    ds: xr.Dataset, sparse_grid: xr.Dataset, varlist: list[str], ensemble=False,
 ) -> xr.Dataset:
     """Gets a dataset of global maps of a list of variables from a sparse dataset
 
@@ -639,6 +732,7 @@ def get_sparse_maps(
         ds (xr.Dataset): sparse grid dataset
         sparse_grid (xr.Dataset): sparse grid file
         varlist (list[str]): list of variables
+        ensemble (optional, bool): whether it is an ensemble. defaults to False.
 
     Returns:
         xr.Dataset: output dataset
@@ -647,26 +741,28 @@ def get_sparse_maps(
     # loop through each variable and map from sparse to global
     ds_list = []
     for var in varlist:
-        var_ds = global_from_sparse(sparse_grid, ds[var], ds).to_dataset(name=var)
+        var_ds = global_from_sparse(sparse_grid, ds[var], ds, ensemble=ensemble).to_dataset(name=var)
         var_ds[var] = var_ds[var]
         ds_list.append(var_ds)
 
     return xr.merge(ds_list)
 
 
-def get_area_means(ds, varlist, var_dict, land_area):
-    ds_list = []
-    for var in varlist:
-        ds_list.append(
-            area_mean(
-                ds[var], var_dict[var]["area_conversion_factor"], land_area
-            ).to_dataset(name=var)
-        )
+def get_sparse_area_means(ds: xr.Dataset, domain: str, varlist: list[str], var_dict: dict, 
+                          land_area: xr.DataArray, biome: xr.DataArray) -> xr.Dataset:
+    """Gets a dataset of sparse area means of a list of variables from a sparse dataset
 
-    return xr.merge(ds_list)
+    Args:
+        ds (xr.Dataset): sparse grid dataset
+        domain (str): 'global' or 'biome'
+        varlist (list[str]): list of variables
+        var_dict (dict): dictionary with information about variables
+        land_area (xr.DataArray): land area for sparse grid
+        biome (xr.DataArray): whittaker biome dataset
 
-
-def get_sparse_area_means(ds, domain, varlist, var_dict, land_area, biome):
+    Returns:
+        xr.Dataset: output dataset
+    """
     ds_list = []
     for var in varlist:
         ds_list.append(
@@ -680,3 +776,70 @@ def get_sparse_area_means(ds, domain, varlist, var_dict, land_area, biome):
         )
 
     return xr.merge(ds_list)
+
+def fix_infl_months(inflection_months):
+
+    # check number of months
+    if len(inflection_months) == 3:
+        return inflection_months  # return as is
+
+    elif len(inflection_months) == 2:
+        first, second = inflection_months
+        if first <= 6:
+            # assume we're missing the last month
+            return np.sort(np.append(inflection_months, 12))
+        else:
+            # assume we're missing the first month
+            return np.sort(np.append(1, inflection_months))
+    elif len(inflection_months) == 1:
+        # assume only have peak
+        return np.sort(np.append(inflection_months, (12, 1)))
+    else:
+        print("ERROR")
+        return None
+
+def compute_infl(da, dim='month'):
+    
+    # compute the first and second derivatives
+    da_vals = da.values
+    first_diff = np.diff(da_vals, axis=-1) >= 0.0
+    second_diff = np.diff(first_diff.astype(int), axis=-1) != 0
+
+    # pad with two False values at the beginning to match original length
+    pad_shape = list(second_diff.shape)
+    pad_shape[-1] = 2
+    pad = np.zeros(pad_shape, dtype=bool)
+    padded = np.concatenate([pad, second_diff], axis=-1)
+
+    # construct output DataArray with correct coords
+    new_coords = dict(da.coords)
+    new_coords[dim] = da[dim]
+
+    infl = xr.DataArray(padded, coords=new_coords, dims=da.dims)
+    
+    # get months where inflection points occur
+    infl_months = da['month'].where(infl).values
+    # remove NaNs
+    non_nan_months = infl_months[~np.isnan(infl_months)]
+
+    return fix_infl_months(non_nan_months)
+        
+def get_start_end_slopes(da, infl_months):
+    
+    start = da.sel(month=slice(infl_months[0].item(), infl_months[1].item()))
+    end = da.sel(month=slice(infl_months[1].item(), infl_months[2].item()))
+    
+    x_start = start['month'].values
+    y_start = start.values
+    x_end = end['month'].values
+    y_end = end.values
+    
+    # skip NaNs or too-short periods
+    if len(x_start) >= 2 and len(x_end) >= 2:
+        slope_start = np.polyfit(x_start, y_start, 1)[0]
+        slope_end = np.polyfit(x_end, y_end, 1)[0]
+    else:
+        slope_start = np.nan
+        slope_end = np.nan
+
+    return slope_start, slope_end
