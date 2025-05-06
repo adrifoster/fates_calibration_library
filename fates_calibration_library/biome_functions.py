@@ -241,7 +241,8 @@ def compute_biotemperature(temp_C: xr.DataArray) -> xr.DataArray:
     """
     
     # clip temperatures between 0 and 30 °C
-    temp_bio = temp_C.where((temp_C > 0) & (temp_C < 30), 0)
+    temp_bio = temp_C.where(temp_C >= 0, 0)
+    temp_bio = temp_bio.where(temp_bio <= 30, 30)
     biotemperature = calculate_annual_mean(temp_bio).mean(dim='year')
     biotemperature.name = "biotemperature"
     biotemperature.attrs["units"] = "°C"
@@ -344,7 +345,8 @@ def compute_sealevel_biotemp(temp_C: xr.DataArray,
     """
     
     sealevel_temp = temp_C + 6.0*(elevation/1000.0)
-    sealevel_temp = sealevel_temp.where((sealevel_temp > 0) & (sealevel_temp < 30), 0)
+    sealevel_temp = sealevel_temp.where(sealevel_temp >= 0, 0)
+    sealevel_temp = sealevel_temp.where(sealevel_temp <= 30, 30)
     mean_sealevel_temp = calculate_annual_mean(sealevel_temp).mean(dim='year')
     mean_sealevel_temp.name = "sealevel_temp"
     mean_sealevel_temp.attrs["units"] = "°C"
@@ -366,21 +368,26 @@ def compute_pet_ratio(PET: xr.DataArray, precip: xr.DataArray) -> xr.DataArray:
     pet_ratio.name = "pet_ratio"
     return pet_ratio
 
-def bin_biotemperature(biotemp_annual: xr.DataArray) -> xr.DataArray:
+def bin_biotemperature(biotemp_annual: xr.DataArray, frost_free: xr.DataArray) -> xr.DataArray:
     """Bin up biotemperature
 
     Args:
         biotemp_annual (xr.DataArray): biotemperature [degrees C]
+        frost_free (xr.DataArray): frost-free area [0/1]
 
     Returns:
         xr.DataArray: binned biotemperature
     """
-    bio_bins = [0, 1.5, 3, 6, 12, 24, 48]
-    bio_labels = ['nival', 'alpine', 'subalpine', 'montane', 'lower montane',
-                  'premontane']
     
+    # bins and names
+    bio_bins = [1.5, 3, 6, 12, 24]
+    bio_labels = ['alvar', 'alpine', 'subalpine', 'montane', 'premontane', '']
+    bio_labels_expanded = ['alvar', 'alpine', 'subalpine', 'montane', 'lower montane', 
+                           'premontane', '']
+    
+    # bin up data
     biotemp = biotemp_annual.load()
-    biotemp_class = xr.apply_ufunc(np.digitize, biotemp, bio_bins) - 1
+    biotemp_class = xr.apply_ufunc(np.digitize, biotemp, bio_bins) 
     bio_labels_arr = np.array(bio_labels)
     biotemp_zone = xr.apply_ufunc(
         lambda i: bio_labels_arr[i],
@@ -389,12 +396,30 @@ def bin_biotemperature(biotemp_annual: xr.DataArray) -> xr.DataArray:
         dask="parallelized",
         output_dtypes=[str]
     )
-
+    
+    # correct for frost-free areas
+    biotemp_zone = xr.where(
+        (biotemp_zone == "premontane") & (~frost_free),
+        "lower montane",
+        biotemp_zone)
+    biotemp_zone = xr.where(
+        (biotemp_zone == "") & (~frost_free),
+        "premontane",
+        biotemp_zone)
+    
+    biotemp_zone.name = 'altitude_zone'
+    
     # map zone names to integers
-    zone_map = {label: i for i, label in enumerate(bio_labels)}
-    biozones = xr.apply_ufunc(lambda z: zone_map[z], biotemp_zone, vectorize=True)
+    zones_int = map_to_int(biotemp_zone.load(), bio_labels_expanded).to_dataset(name='altitude_zone_int')
+    
+    return xr.merge([biotemp_zone, zones_int])
 
-    return biozones, biotemp_zone
+def map_to_int(ds, labels):
+    
+    zone_map = {label: i for i, label in enumerate(labels)}
+    zones = xr.apply_ufunc(lambda z: zone_map[z], ds, vectorize=True)
+    
+    return zones
 
 def bin_sealeveltemp(sealevel_temp: xr.DataArray, frost_free: xr.DataArray) -> xr.DataArray:
     """Bin up sea-level temperature 
@@ -404,15 +429,15 @@ def bin_sealeveltemp(sealevel_temp: xr.DataArray, frost_free: xr.DataArray) -> x
         frost_free (xr.DataArray): frost-free area [0/1]
 
     Returns:
-        xr.DataArray: _description_
+        xr.DataArray: latitude bins
     """
     temp_bins = [1.68, 3.36, 6.72, 13.44, 26.89]
-    temp_labels = ['polar', 'subpolar', 'cool temperate', 'subtropical', 'tropical']
-    temp_labels_extra = ['polar', 'subpolar', 'cool temperate', 'warm temperate',
+    temp_labels = ['polar', 'subpolar', 'boreal', 'cool temperate', 'subtropical', 'tropical']
+    temp_labels_expanded = ['polar', 'subpolar', 'boreal', 'cool temperate', 'warm temperate',
                          'subtropical', 'tropical']
     
     seatemp = sealevel_temp.load()
-    seatemp_class = xr.apply_ufunc(np.digitize, seatemp, temp_bins) - 1
+    seatemp_class = xr.apply_ufunc(np.digitize, seatemp, temp_bins)
     lat_labels_arr = np.array(temp_labels)
     seatemp_zone = xr.apply_ufunc(
         lambda i: lat_labels_arr[i],
@@ -430,35 +455,46 @@ def bin_sealeveltemp(sealevel_temp: xr.DataArray, frost_free: xr.DataArray) -> x
         (seatemp_zone == "tropical") & (~frost_free),
         "subtropical",
         seatemp_zone)
-
-    zones = seatemp_zone.load()
-    # map zone names to integers
-    zone_map = {label: i for i, label in enumerate(temp_labels_extra)}
-    latzones = xr.apply_ufunc(lambda z: zone_map[z], zones, vectorize=True)
-
-    return latzones, seatemp_zone
-
-def bin_precip(precip_annual: xr.DataArray) -> xr.DataArray:
-    precip_bins = [62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-    precip_labels = ['superarid', 'periarid', 'arid', 'semi-arid', 'sub-humid',
-                  'humid', 'perhumid', 'superhumid']
     
-    precip = precip_annual.load()
-    precip_class = xr.apply_ufunc(np.digitize, precip, precip_bins) - 1
-    prec_labels_arr = np.array(precip_labels)
-    precip_zone = xr.apply_ufunc(
-        lambda i: prec_labels_arr[i],
-        precip_class,
-        vectorize=True,
-        dask="parallelized",
-        output_dtypes=[str]
-    )
+    seatemp_zone.name = 'latitude_zone'
 
     # map zone names to integers
-    zone_map = {label: i for i, label in enumerate(precip_labels)}
-    preczones = xr.apply_ufunc(lambda z: zone_map[z], precip_zone, vectorize=True)
+    zones_int = map_to_int(seatemp_zone.load(), temp_labels_expanded).to_dataset(name='latitude_zone_int')
 
-    return preczones
+    return xr.merge([seatemp_zone, zones_int])
+
+def classify_holdridge(clim_dat, holdridge_dat):
+    
+    clim_flat = clim_dat.stack(grid=('lat', 'lon'))
+    
+    # convert holdridge columns to np arrays
+    hold_pet = holdridge_dat['PET_ratio'].values 
+    hold_temp = holdridge_dat['biotemp'].values
+    hold_precip = holdridge_dat['precip'].values
+    
+    # get CLM data
+    pet_vals = clim_flat['pet_ratio'].values[:, np.newaxis] 
+    biotemp_vals = clim_flat['biotemperature'].values[:, np.newaxis]
+    precip_vals = clim_flat['precipitation'].values[:, np.newaxis]
+    
+    # compute euclidean distance
+    pet_dist = (pet_vals - hold_pet) ** 2
+    temp_dist = (biotemp_vals - hold_temp) ** 2
+    precip_dist = (precip_vals - hold_precip) ** 2
+    total_dist = pet_dist + temp_dist + precip_dist
+    
+    # find best match per grid cell
+    best_idx = np.argmin(total_dist, axis=1)
+    biome_labels = holdridge_dat['biome'].values[best_idx]
+
+    biome_da = xr.DataArray(
+        biome_labels.reshape(clim_dat['pet_ratio'].shape),
+        coords=clim_dat['pet_ratio'].coords,
+        dims=clim_dat['pet_ratio'].dims,
+        name='holdridge_biome'
+    )
+    
+    return biome_da
 
 def get_frost_free(temp_C: xr.DataArray) -> xr.DataArray:
     """Returns a binary frost-free mask
@@ -481,38 +517,24 @@ def get_holdridge_dat(clm_ds, elevation):
     biotemperature = compute_biotemperature(temp_C)
     sealevel_temp = compute_sealevel_biotemp(temp_C, elevation)
     precipitation = compute_annual_precip(clm_ds.RAIN, clm_ds.SNOW)
-    pot_evap = compute_thornthwaite_pet(temp_C, clm_ds.lat).sum(dim='month')
-    pet_ratio = compute_pet_ratio(pot_evap, precipitation)
+    pet_ratio = (biotemperature*58.93)/precipitation
+    pet_ratio.name = 'pet_ratio'
     frost_free = get_frost_free(temp_C)
     
     # bin up temperature
-    biozones, biotemp_zone = bin_biotemperature(biotemperature)
-    latzones, seatemp_zone = bin_sealeveltemp(sealevel_temp, frost_free)
+    biozones = bin_biotemperature(biotemperature, frost_free)
+    latzones = bin_sealeveltemp(sealevel_temp, frost_free)
     
     # if actual biotemperature and sea-level temperature are in the same zone, altitudinal
     # zone is 'basal' (i.e. nothing)
-    same_zone = biozones == latzones
-    biotemp_zone = xr.where(same_zone, '', biotemp_zone)
-    biozones = xr.where(same_zone, -1, biozones)
+    same_zone = biozones.altitude_zone_int == latzones.latitude_zone_int
+    biozones['altitude_zone'] = xr.where(same_zone, '', biozones.altitude_zone)
+    biozones['altitude_zone_int'] = xr.where(same_zone, 0, biozones.altitude_zone_int)
     
-    clim_dat = xr.merge([seatemp_zone.to_dataset(name='latitude_zone'),
-                         biotemp_zone.to_dataset(name='altitude_zone'),
-                         biozones.to_dataset(name='altitude_ind'),
-                         latzones.to_dataset(name='latitude_ind'),
-                         biotemperature,
-                         pet_ratio, 
-                         precipitation])
-    
-    clim_dat["latitude_region"] = xr.where(
-        (clim_dat.latitude_zone == "subtropical") | (clim_dat.latitude_zone == "warm temperate"),
-        "warm_temp_trop", clim_dat.latitude_zone)
-    
-    temp_labels = ['polar', 'subpolar', 'cool temperate', 'warm_temp_trop', 'tropical']
-    zones = clim_dat['latitude_region'].load()
-    zone_map = {label: i for i, label in enumerate(temp_labels)}
-    latzones = xr.apply_ufunc(lambda z: zone_map[z], zones, vectorize=True)
-    clim_dat['latitude_region_ind'] = latzones
-    
+    clim_dat = xr.merge([biotemperature,
+                     pet_ratio,
+                     precipitation,
+                     biozones, latzones])
     return clim_dat
     
                                              

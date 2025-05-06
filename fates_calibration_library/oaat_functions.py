@@ -4,6 +4,8 @@ import xarray as xr
 import numpy as np
 import pandas as pd
 
+from fates_calibration_library.analysis_functions import compute_infl, get_start_end_slopes
+
 def get_fates_param_dat(fates_param_list_file: str, oaat_key: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns pandas DataFrames with information about FATES parameters associated with a 
     one-at-a-time ensemble
@@ -43,9 +45,15 @@ def get_fates_param_dat(fates_param_list_file: str, oaat_key: pd.DataFrame) -> t
 
 def get_clm_param_dat(param_list):
     
+    not_in = [180, 181, 306, 307, 308, 309, 312, 313, 314,
+          315, 316, 317, 318, 319, 320, 321, 322, 323,
+          324, 325, 326, 327, 328, 329, 330, 331, 332,
+          333]
+    
     clm_param_dat = pd.read_csv(param_list)
     clm_param_dat.columns = ['parameter_name', 'ensemble', 'type', 'category', 'subcategory']
     clm_param_dat.ensemble = [int(e.replace('CLM6SPoaat', '')) for e in clm_param_dat.ensemble]
+    clm_param_dat = clm_param_dat[~clm_param_dat.ensemble.isin(not_in)]
     clm_param_dat = clm_param_dat.set_index("ensemble").to_xarray()
 
     return clm_param_dat
@@ -73,13 +81,13 @@ def get_differences(ds: xr.Dataset, out_vars: list[str], default: xr.Dataset) ->
 
     return diff
 
-def get_area_means_diffs(ds: xr.Dataset, param_info: xr.Dataset, out_vars: list[str], 
+def get_area_means_diffs(file: str, param_info: xr.Dataset, out_vars: list[str], 
                          default_ind: int=0) -> xr.Dataset:
     """Gets the sum of all differences between mean and iav for across all history variables
     for each ensemble member
 
     Args:
-        ds (xr.Dataset): ensemble dataset
+        file (str): path to ensemble dataset
         param_info (xr.Datset): data frame with information about parameters
         out_vars (list[str]): list of output variables
         default_ind (int, optional): index of default simulation. Defaults to 0.
@@ -87,7 +95,8 @@ def get_area_means_diffs(ds: xr.Dataset, param_info: xr.Dataset, out_vars: list[
     Returns:
         xr.Dataset: output dataset with differences
     """
-
+    
+    ds = xr.open_dataset(file)
     default_mean = ds.sel(ensemble=default_ind).sel(summation_var='mean')
     default_iav = ds.sel(ensemble=default_ind).sel(summation_var='iav')
     mean_vals = ds.sel(summation_var='mean')
@@ -104,6 +113,15 @@ def get_area_means_diffs(ds: xr.Dataset, param_info: xr.Dataset, out_vars: list[
 
     return ds
 
+def get_combined(ds1, ds2, name1, name2):
+
+    ds1 = ds1.assign(sim_source=("ensemble", [name1] * ds1.sizes['ensemble']))
+    ds2 = ds2.assign(sim_source=("ensemble", [name2] * ds2.sizes['ensemble']))
+    
+    ds2_shifted = ds2.assign_coords(ensemble=ds2.ensemble + ds1.sizes['ensemble'])
+    
+    return xr.concat([ds1, ds2_shifted], dim="ensemble")
+
 def get_min_max_diff(ds: xr.Dataset) -> pd.DataFrame:
     """Gets differences between min and max ensemble members for all variables
 
@@ -116,20 +134,31 @@ def get_min_max_diff(ds: xr.Dataset) -> pd.DataFrame:
     """
 
     # we don't want to look at these data variables
-    skip_vars = ['parameter_name', 'type', 'category', 'subcategory', 'sum_diff']
+    skip_vars = ['parameter_name', 'type', 'category', 'subcategory', 'sum_diff',
+                 'sim_source']
     vars_to_check = [v for v in ds.data_vars if v not in skip_vars]
+    
+    default_ds = ds.where(ds.ensemble == 0, drop=True)
 
     # group by parameter name
     grouped = ds.groupby('parameter_name')
     diffs = {}
     for param, group in grouped:
         # select the min and max rows
-        min_val = group.where(group.type == 'min', drop=True)
-        max_val = group.where(group.type == 'max', drop=True)
+        if (group.type == 'min').any():
+            min_val = group.where(group.type == 'min', drop=True)
+        else:
+            min_val = default_ds
+
+        # Check if 'max' exists in the group
+        if (group.type == 'max').any():
+            max_val = group.where(group.type == 'max', drop=True)
+        else:
+            max_val = default_ds
         
         # sanity check: if either is missing, skip
         if min_val.sizes['ensemble'] == 0 or max_val.sizes['ensemble'] == 0:
-            continue
+           continue
         
         # assume one row per type per parameter
         min_val = min_val.isel(ensemble=0)
@@ -145,7 +174,8 @@ def get_min_max_diff(ds: xr.Dataset) -> pd.DataFrame:
 
     return df_diffs
 
-def get_top_n(ds: xr.Dataset, df_diffs: pd.DataFrame, variable: str, n: int) -> pd.DataFrame:
+def get_top_n(ds: xr.Dataset, df_diffs: pd.DataFrame, variable: str, n: int,
+              exclude_list=None) -> pd.DataFrame:
     """Gets the top n ensemble members with the most impact on variable
 
     Args:
@@ -160,6 +190,8 @@ def get_top_n(ds: xr.Dataset, df_diffs: pd.DataFrame, variable: str, n: int) -> 
     """
 
     # get top n parameters for this variable
+    if exclude_list is not None:
+        df_diffs = df_diffs.loc[~df_diffs.index.isin(exclude_list)]
     top_params = df_diffs[variable].sort_values(ascending=False).head(n).index
 
     results = []
@@ -179,4 +211,44 @@ def get_top_n(ds: xr.Dataset, df_diffs: pd.DataFrame, variable: str, n: int) -> 
     return pd.DataFrame(results)
 
 
+def get_ensemble_slopes(ds, fates_param_dat, default_ind=0,
+                        skip_vars=['category', 'subcategory', 'type', 'parameter_name']):
+    if skip_vars is None:
+        skip_vars = []
+    slope_start_vars = {}
+    slope_end_vars = {}
 
+    for variable in ds.data_vars:
+        if variable in skip_vars:
+            continue
+        if 'month' not in ds[variable].dims:
+            continue
+        try:
+            infl_months = compute_infl(ds[variable].mean(dim='ensemble'))
+            slopes_start = []
+            slopes_end = []
+            for ens in ds.ensemble.values:
+                da_ens = ds[variable].sel(ensemble=ens)
+                slope_start, slope_end = get_start_end_slopes(da_ens, infl_months)
+                slopes_start.append(slope_start)
+                slopes_end.append(slope_end)
+            
+            slope_start_da = xr.DataArray(slopes_start, 
+                                          coords={'ensemble': ds.ensemble},
+                                          dims='ensemble')
+            slope_end_da = xr.DataArray(slopes_end, 
+                                        coords={'ensemble': ds.ensemble},
+                                        dims='ensemble')
+            slope_start_vars[variable] = slope_start_da
+            slope_end_vars[variable] = slope_end_da
+            
+        except Exception as e:
+            print(f"Skipping variable {variable} due to error: {e}")
+            continue
+    
+    slope_start_ds = xr.Dataset(slope_start_vars)
+    slope_end_ds = xr.Dataset(slope_end_vars)
+    slope_start_ds = xr.merge([slope_start_ds, fates_param_dat])
+    slope_end_ds = xr.merge([slope_end_ds, fates_param_dat])
+    
+    return slope_start_ds, slope_end_ds

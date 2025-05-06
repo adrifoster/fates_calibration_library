@@ -17,7 +17,7 @@ RUN_ENSEMBLE_SCRIPT="/glade/work/afoster/FATES_calibration/fates_calibration_lib
 # ------------------ #
 
 if [[ -z "${CONF:-}" ]]; then
-  echo "Error: CONF variable not set. Use: qsub -v CONF=/path/to/config submit_oaat"
+  echo "Error: CONF variable not set. Use: qsub -v CONF=/path/to/config submit_ensemble"
   exit 1
 fi
 

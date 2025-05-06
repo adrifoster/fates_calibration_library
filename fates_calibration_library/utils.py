@@ -32,3 +32,25 @@ def evaluate_conversion_factor(factor) -> float:
         elif op == "add":
             return sum(operands)
     return factor
+
+
+def join_nonempty(*parts: list[str]) -> str:
+    """Joins a list of strings but does not include emtpy strings.
+
+    Returns:
+        str: concatenated string
+    """
+    return " ".join(p for p in parts if p and p.strip())
+
+# def join_nonempty(lat, alt, biome):
+#     """Join logic:
+#     - If altitude is an empty string or NaN, return "latitude biome"
+#     - Otherwise return "altitude biome"
+#     """
+#     def is_empty(val):
+#         return val.strip() == ""
+
+#     if is_empty(alt):
+#         return f"{lat.strip()} {biome.strip()}"
+#     else:
+#         return f"{alt.strip()} {biome.strip()}"

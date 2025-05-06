@@ -7,10 +7,12 @@ import xarray as xr
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+from matplotlib.lines import Line2D
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.mpl.geocollection import GeoQuadMesh
 import seaborn as sns
+from adjustText import adjust_text
 
 from fates_calibration_library.analysis_functions import month_difference
 from fates_calibration_library.analysis_functions import calculate_zonal_mean
@@ -518,7 +520,7 @@ def plot_two_model_diff(da1, da2, ds1_name, ds2_name, fates_var, units, cmap):
                 f"{ds2_name} - {ds1_name}",
                 "RdBu_r",
                 diff.min().values,
-                diff.min().values,
+                diff.max().values,
                 diverging_cmap=True,
             )
     cbar1 = figure.colorbar(pcm, ax=axes[2], shrink=1, orientation="vertical")
@@ -930,11 +932,16 @@ def plot_oaat_params(param_dat: pd.DataFrame, model: str):
     
     plt.tight_layout()
 
-def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units):
+def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units,
+                    combined_sim=False):
     
     default_sim = ds.sel(ensemble=default_ind).sel(summation_var=sum_var)
-    sumvar_ds = ds.where(ds.ensemble > 0, drop=True).sel(summation_var=sum_var)
-    sumvar_ds = sumvar_ds.where(sumvar_ds.sum_diff > 0.0)
+    sumvar_ds = ds.sel(summation_var=sum_var)
+    sumvar_ds = sumvar_ds.where(sumvar_ds.sum_diff > 0.0, drop=True)
+
+    ensemble_valid = sumvar_ds.ensemble.values
+    ensemble_plot_index = np.arange(1, len(ensemble_valid) + 1)
+    ensemble_index_map = dict(zip(ensemble_valid, ensemble_plot_index))
     
     get_blank_plot()
     plt.axhline(y=default_sim[variable].mean().values, color='k', linestyle='--', linewidth=1)
@@ -949,25 +956,70 @@ def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units):
         alpha=0.3,
     )
     
+    marker_map = {
+        "fates parameters": "o",  # circle
+        "clm parameters": "x",  # square
+    }
+    
     cats = np.unique(sumvar_ds.category.dropna(dim='ensemble'))
+    if combined_sim:
+        sources = np.unique(sumvar_ds.sim_source.dropna(dim='ensemble'))
+    else:
+        sources = ['fates parameters']
+        sumvar_ds['sim_source'] = 'fates parameters'
+    
     for category in cats:
-        sub = sumvar_ds.where(sumvar_ds.category == category)
-        plt.scatter(sub.ensemble, sub[variable], alpha=0.5, s=20,
-                    color=_CATEGORY_COLORS[category], label=category)
+        for sim in sources:
+            sub = sumvar_ds.where(
+                (sumvar_ds.category == category) & (sumvar_ds.sim_source == sim), drop=True
+            )
+            if sub[variable].count() > 0:
+                x_vals = [ensemble_index_map[e.item()] for e in sub.ensemble.values]
+                plt.scatter(x_vals, 
+                            sub[variable], 
+                            alpha=0.5, 
+                            s=20,
+                            color=_CATEGORY_COLORS[category],
+                            marker=marker_map.get(str(sim), "x"),
+                            label=category)
+
+    category_handles = [
+        Line2D([0], [0], marker='o', color='w', label=_CATEGORY_LABELS[cat],
+               markerfacecolor=_CATEGORY_COLORS[cat], markersize=6, linestyle='None')
+        for cat in cats
+    ]
+    source_labels = {
+        "fates parameters": "FATES parameters",
+        "clm parameters": "CLM parameters"
+    }
+    source_handles = [
+        Line2D([0], [0], marker=marker_map[src], color='k', label=source_labels[src],
+               linestyle='None', markersize=6)
+        for src in sources
+    ]
     
-    
-    handles, labels = plt.gca().get_legend_handles_labels()
-    new_labels = [_CATEGORY_LABELS[label] for label in labels]
-    plt.legend(
-        handles=handles,
-        labels=new_labels,
-        title=None,
+    legend1 = plt.legend(
+        handles=category_handles,
         loc='lower center',
-        bbox_to_anchor=(0.5, -0.31),
-        ncol=2
+        bbox_to_anchor=(0.5, -0.25),
+        borderaxespad=-1,
+        title=None,
+        ncol=2,
+        frameon=False,
     )
+    if combined_sim:
+        legend2 = plt.legend(
+            handles=source_handles,
+            loc='upper left',
+            bbox_to_anchor=(1.02, 0.6),
+            borderaxespad=0.0,
+            frameon=False,
+            ncol=1,
+        )
+        plt.gca().add_artist(legend1) 
     plt.xlabel('Ensemble Member')
     plt.ylabel(f"{ylabel} ({units})")
+    
     
 def plot_top_n(ds, default, variable, ylabel, units):
     
@@ -1119,3 +1171,103 @@ def plot_top_n(ds, default, variable, ylabel, units):
 #     )
 #     fig.suptitle(f"Observations for {pft} grids")
 #     fig.tight_layout()
+
+def plot_oaat_climatology(climatology_ens, default, variable, variable_name, 
+                          units, interesting_ensembles):
+    
+    texts = []
+    
+    plt.figure(figsize=(12, 6))
+    
+    for ens in climatology_ens.ensemble.values:
+        sub = climatology_ens.sel(ensemble=ens)
+        plt.plot(sub[variable].month, sub[variable], color='gray', alpha=0.4)
+    
+    plt.plot(default[variable].month, default[variable], color='red')
+    plt.plot([], [], color='k', alpha=0.4, label='Perturbed Ensembles')
+    plt.plot([], [], color='red', label='Default')
+    
+    # Highlight & annotate interesting ensembles
+    for ens in interesting_ensembles:
+        sub = climatology_ens.sel(ensemble=ens)
+        param_name = climatology_ens.sel(ensemble=ens).parameter_name.values
+        type = climatology_ens.sel(ensemble=ens).type.values
+        label = f'{param_name} {type}'
+        line = plt.plot(sub[variable].month, sub[variable], color='k')[0]
+        x = 6
+        y = sub[variable].sel(month=x).values
+        texts.append(
+            plt.text(
+                x + 0.2, y, label,
+                fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='black', alpha=0.8)
+            )
+        )
+    adjust_text(
+        texts,
+        arrowprops=dict(arrowstyle='->', color='black'),
+        only_move={'points': 'y', 'texts': 'xy'}
+    )
+    plt.grid(True, linestyle='--', alpha=0.3)
+    plt.legend(loc='upper left')
+    plt.xlabel('Month')
+    plt.ylabel(f'{variable_name} ({units})')
+    plt.xticks(ticks=range(1, 13), labels=[
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ])
+    plt.tight_layout()
+    
+def plot_oaat_zonal(zonal_ens, default, variable, variable_name, units,
+    interesting_ensembles=None):
+    
+    texts = []
+    
+    get_blank_plot()
+    plt.ylim(-90, 90)
+    plt.grid(
+        True,
+        which="both",
+        axis="y",
+        linestyle="--",
+        linewidth=0.5,
+        color="black",
+        alpha=0.3,
+    )
+    plt.tick_params(bottom=False, top=False, left=False, right=False)
+
+    # plot models
+    for ens in zonal_ens.ensemble.values:
+        sub = zonal_ens.sel(ensemble=ens)
+        plt.plot(sub[variable].values, sub.lat.values, color='gray', alpha=0.4)
+    plt.plot(default[variable].values, default.lat.values, color='red')
+    
+    plt.plot([], [], color='k', alpha=0.4, label='Perturbed Ensembles')
+    plt.plot([], [], color='red', label='Default')
+        
+    plt.ylabel("Latitude (º)", fontsize=11)
+    plt.xlabel(f"Annual {variable_name} ({units})", fontsize=11)
+    plt.legend(loc="upper right")
+
+    # Highlight & annotate interesting ensembles
+    # for ens in interesting_ensembles:
+    #     sub = climatology_ens.sel(ensemble=ens)
+    #     param_name = climatology_ens.sel(ensemble=ens).parameter_name.values
+    #     type = climatology_ens.sel(ensemble=ens).type.values
+    #     label = f'{param_name} {type}'
+    #     line = plt.plot(sub[variable].month, sub[variable], color='k')[0]
+    #     x = 6
+    #     y = sub[variable].sel(month=x).values
+    #     texts.append(
+    #         plt.text(
+    #             x + 0.2, y, label,
+    #             fontsize=9,
+    #             bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='black', alpha=0.8)
+    #         )
+    #     )
+    # adjust_text(
+    #     texts,
+    #     arrowprops=dict(arrowstyle='->', color='black'),
+    #     only_move={'points': 'y', 'texts': 'xy'}
+    # )
+    plt.tight_layout()
