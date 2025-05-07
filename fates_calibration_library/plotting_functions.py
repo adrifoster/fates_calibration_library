@@ -1271,3 +1271,22 @@ def plot_oaat_zonal(zonal_ens, default, variable, variable_name, units,
     #     only_move={'points': 'y', 'texts': 'xy'}
     # )
     plt.tight_layout()
+    
+def plot_params(default_param_data, param_ds, parameter):
+    ens = [int(e) for e in param_ds.ensemble]
+    pfts = np.unique(param_ds.fates_pft)
+    da = param_ds[parameter]
+    if 'fates_pft' in da.dims:
+        fig, axes = plt.subplots(4, 4, figsize=(13, 6), sharex=True, sharey=True)
+        axes = axes.flatten(order="F")
+        for idx, ax in enumerate(axes):
+            if 'fates_plant_organs' in da.dims:
+                sub = da.sel(fates_pft = pfts[idx]).isel(fates_plant_organs=0)
+                sub_def = default_param_data.sel(fates_pft = pfts[idx]).isel(fates_plant_organs=0)[parameter].values
+            else:
+                sub = da.sel(fates_pft = pfts[idx])
+                sub_def = default_param_data.sel(fates_pft = pfts[idx])[parameter].values
+            ax.scatter(ens, sub, label=pfts[idx])
+            ax.set_title(pfts[idx])
+            ax.axhline(y=sub_def, color='r', linestyle='--')
+    plt.suptitle(parameter)

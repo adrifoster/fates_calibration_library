@@ -508,12 +508,12 @@ def area_mean_from_sparse(
     return weighted_mean
 
 
-def area_mean(da: xr.DataArray, cf, land_area: xr.DataArray) -> xr.DataArray:
+def area_mean(da: xr.DataArray, cf: float, land_area: xr.DataArray) -> xr.DataArray:
     """Calculates a global area-weighted mean of a global dataset
 
     Args:
         da (xr.DataArray): input data array
-        cf (_type_): conversion factor
+        cf (float): conversion factor
         land_area (xr.DataArray): land area data array
 
     Returns:

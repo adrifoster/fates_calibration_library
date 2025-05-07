@@ -12,6 +12,10 @@ PARAM_INFO = {
         "root_param": "fates_nonhydro_smpso",
         "actual_param": "fates_nonhydro_smpsc",
         "default_value": np.array([189000]),
+    },
+    "fates_stoich_nitr_1": {
+        "actual_param": "fates_stoich_nitr",
+        "array_index": 0
     }
 }
 
@@ -289,7 +293,7 @@ def get_root_values(
 
     if root_param in params:
         default_root = default_param_data[root_param].values
-        root_loc = params.index(root_param)
+        root_loc = np.where(params == root_param)
         return get_lh_values(sample[root_loc], param_dat, root_param, default_root)
 
     return default_param_data[root_param].values
@@ -382,6 +386,13 @@ def set_lh_param_value(
 
         # actual value is root + delta
         param_value = root_value + delta_value
+        
+    elif param_type == "array_index":
+        
+        param_value = get_lh_values(value, param_dat, parameter, default_value)
+        for i in range(len(param_value)):
+            if i != PARAM_INFO[parameter]['array_index']:
+                param_value[i] = default_value[i]
 
     # set default pfts if they are supplied
     if len(keep_pfts) > 0 and "fates_pft" in dims:
@@ -400,6 +411,7 @@ def create_lh_param_ensemble(
     param_dat: dict,
     out_dir: str,
     param_prefix: str,
+    lh_sample: np.ndarray[float]=None,
     keep_pfts: list[int] = None,
 ):
     """Generates an ensemble of Latin Hypercube parameter files
@@ -411,13 +423,25 @@ def create_lh_param_ensemble(
         param_dat (dict): dictionary of parameter information
         out_dir (str): output directory to write files to
         param_prefix (str): parameter file prefix
-        keep_pfts (list[str], optional): list of pft to be left at default values. Defaults to [].
+        lh_sample (np.ndarray[float], optional): Latin Hypercube sample. Defaults to None.
+        keep_pfts (list[str], optional): list of pft to be left at default values. Defaults to None.
     """
 
-    # create a latin hypercube
+    if keep_pfts is None:
+        keep_pfts = []
+    
     num_params = len(params)
-    sampler = qmc.LatinHypercube(d=num_params)
-    lh_sample = sampler.random(n=num_samples)
+    
+    if lh_sample is None:
+        # create a latin hypercube
+        sampler = qmc.LatinHypercube(d=num_params)
+        lh_sample = sampler.random(n=num_samples)
+    else:
+        # check to make sure input latin hypercube sample matches other inputs
+        if lh_sample.shape[0] != num_params:
+            raise Exception(f"LH sample size {lh_sample.shape[0]} is not the same size as num_samples {num_samples}")
+        elif lh_sample.shape[1] != num_params:
+            raise Exception(f"LH parameter number {lh_sample.shape[1]} is not the same size as parameter number {num_params}")
 
     # get information about all parameter data
     main_param = param_dat["main"]
