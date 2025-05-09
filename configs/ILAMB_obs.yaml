@@ -1,3 +1,94 @@
+CERESed4.1_ALBEDO:
+  sub_dir: albedo
+  model: CERESed4.1
+  filename: null
+  in_var: albedo
+  out_var: albedo
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  0-1
+  longname: all sky albedo
+
+GEWEX.SRB_ALBEDO:
+  sub_dir: albedo
+  model: GEWEX.SRB
+  filename: null
+  in_var: albedo
+  out_var: albedo
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  0-1
+  longname: all sky albedo
+  
+ESACCI_BIOMASS:
+  sub_dir: biomass
+  model: ESACCI
+  filename: biomass.nc
+  in_var: biomass
+  out_var: biomass
+  time_conversion_factor: 1.0
+  area_conversion_factor: 1.0
+  max_val: null
+  min_val: null
+  units:  Mg ha-1
+  longname: aboveground dry biomass
+
+GEOCARBON_BIOMASS:
+  sub_dir: biomass
+  model: GEOCARBON
+  filename: biomass.nc
+  in_var: biomass
+  out_var: biomass
+  time_conversion_factor: 1.0
+  area_conversion_factor: 1.0
+  max_val: null
+  min_val: null
+  units:  Mg ha-1
+  longname: aboveground dry biomass
+  
+GLOBALCARBON_BIOMASS:
+  sub_dir: biomass
+  model: GLOBAL.CARBON
+  filename: biomass_0.5x0.5.nc
+  in_var: biomass
+  out_var: biomass
+  time_conversion_factor: 1.0
+  area_conversion_factor: 1.0
+  max_val: null
+  min_val: null
+  units:  MgC ha-1
+  longname: above and belowground live biomass carbon
+  
+XUSAATCHI_BIOMASS:
+  sub_dir: biomass
+  model: XuSaatchi2021
+  filename: XuSaatchi.nc
+  in_var: biomass
+  out_var: biomass
+  time_conversion_factor: 1.0
+  area_conversion_factor: 1.0
+  max_val: null
+  min_val: null
+  units:  MgC ha-1
+  longname: global above and belowground woody carbon
+  
+GFED4.1S_BURNTAREA:
+  sub_dir: burntArea
+  model: GFED4.1S
+  filename: burntArea.nc
+  in_var: burntArea
+  out_var: burntarea
+  time_conversion_factor: null
+  area_conversion_factor: 1.0
+  max_val: null
+  min_val: null
+  units:  percent
+  longname: burned area
+
 FLUXCOM_GPP:
   sub_dir: gpp
   model: FLUXCOM
@@ -49,6 +140,19 @@ FLUXCOM_NEE:
   min_val: null
   units: kgC m-2 yr-1
   longname: net ecosystem exchange
+  
+GBAF_NEE:
+  sub_dir: nee
+  model: GBAF
+  filename: nee_0.5x0.5.nc
+  in_var: nee
+  out_var: nee
+  time_conversion_factor: 86400.0
+  area_conversion_factor: 1.0e-6
+  max_val: null
+  min_val: null
+  units: kgC m-2 yr-1
+  longname: net ecosystem exchange
 
 AVHRR_LAI:
   sub_dir: lai
@@ -67,6 +171,19 @@ AVH15C1_LAI:
   sub_dir: lai
   model: AVH15C1
   filename: lai.nc
+  in_var: lai
+  out_var: lai
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units: m2 m-2
+  longname: leaf area index
+  
+GIMMS_LAI:
+  sub_dir: lai
+  model: GIMMS_LAI4g
+  filename: cao2023_lai.nc
   in_var: lai
   out_var: lai
   time_conversion_factor: null
@@ -236,31 +353,6 @@ WangMao_SW:
   units:  kg m-2
   longname: surface soil moisture
 
-CERESed4.1_ALBEDO:
-  sub_dir: albedo
-  model: CERESed4.1
-  filename: null
-  in_var: albedo
-  out_var: albedo
-  time_conversion_factor: null
-  area_conversion_factor: null
-  max_val: null
-  min_val: null
-  units:  0-1
-  longname: all sky albedo
-
-GEWEX.SRB_ALBEDO:
-  sub_dir: albedo
-  model: GEWEX.SRB
-  filename: null
-  in_var: albedo
-  out_var: albedo
-  time_conversion_factor: null
-  area_conversion_factor: null
-  max_val: null
-  min_val: null
-  units:  0-1
-  longname: all sky albedo
 
 CERESed4.1_RSDS:
   sub_dir: rsds
@@ -443,45 +535,6 @@ CLASS_GR:
   min_val: null
   units:  W m-2
   longname: ground heat radiation flux
-
-ESACCI_BIOMASS:
-  sub_dir: biomass
-  model: ESACCI
-  filename: biomass.nc
-  in_var: biomass
-  out_var: biomass
-  time_conversion_factor: 1.0
-  area_conversion_factor: 1.0
-  max_val: null
-  min_val: null
-  units:  Mg ha-1
-  longname: aboveground biomass
-
-GEOCARBON_BIOMASS:
-  sub_dir: biomass
-  model: GEOCARBON
-  filename: biomass.nc
-  in_var: biomass
-  out_var: biomass
-  time_conversion_factor: 1.0
-  area_conversion_factor: 1.0
-  max_val: null
-  min_val: null
-  units:  Mg ha-1
-  longname: aboveground biomass
-
-GFED4.1S_BURNTAREA:
-  sub_dir: burntArea
-  model: GFED4.1S
-  filename: burntArea.nc
-  in_var: burntArea
-  out_var: burntarea
-  time_conversion_factor: null
-  area_conversion_factor: 1.0
-  max_val: null
-  min_val: null
-  units:  percent
-  longname: burned area
 
 FLUXCOM_EF:
   sub_dir: null

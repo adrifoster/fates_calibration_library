@@ -17,17 +17,54 @@ from fates_calibration_library.analysis_functions import (
 from fates_calibration_library.utils import evaluate_conversion_factor
 from fates_calibration_library.surface_data_functions import extract_biome
 
-
-def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
-    """Processes ILAMB datasets: reads, converts to annual values, regrids, and saves.
+def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset,
+                          res: str):
+    """Regrids all ILAMB dataset
 
     Args:
-        config_dict (dict): Configuration containing top_dir, clobber, out_dir, start_date,
-                        end_date, and user.
+        config_dict (dict): Configuration containing top_dir, clobber, out_dir
         ilamb_dict (dict): Dictionary with ILAMB dataset information.
         target_grid (xr.Dataset): Target grid for regridding.
         clobber (bool): whether to overwrite files.
+        res (str): resolution string to use to make filename
     """
+    # create output directory if it doesn't exist
+    os.makedirs(config_dict["out_dir"], exist_ok=True)
+    
+    # regrid each dataset
+    for dataset, attributes in ilamb_dict.items():
+        out_file = os.path.join(
+            config_dict["out_dir"],
+            f"{attributes['model']}_{attributes['out_var'].upper()}_{res}.nc",
+        )
+
+        # skip if file exists and clobber is False
+        if os.path.isfile(out_file) and not config_dict["clobber"]:
+            print(f"File {out_file} for {dataset} exists, skipping")
+            continue
+
+        ds_out = regrid_dataset(config_dict, ilamb_dict, attributes, target_grid)
+        ds_out.to_netcdf(out_file, mode="w")
+    
+
+def regrid_dataset(config_dict, ilamb_dict, attributes, target_grid):
+    """Handles regridding for a single dataset
+
+    Args:
+        config (dict): Configuration containing top_dir, clobber, out_dir
+        ilamb_dict (dict): Dictionary with ILAMB dataset information.
+        dataset (str): ILAMB dataset name
+        attributes (dict): dictionary with attributes about this ILAMB dataset
+        target_grid (xr.DataArray): target grid for regridding
+    """
+    
+    # read or compute ILAMB data
+    ilamb_dat, original_file = read_ilamb_data(config_dict, ilamb_dict, attributes)
+    
+    pass
+
+
+def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
 
     # create output directory if it doesn't exist
     os.makedirs(config_dict["out_dir"], exist_ok=True)
@@ -92,36 +129,39 @@ def process_dataset(
         sum_annual = regridded_annual[attributes["out_var"]]
     regridded_annual = regridded_annual.where(np.abs(sum_annual) > 0.0)
 
-    # monthly mean
-    monthly_mean = calculate_monthly_mean(
-        ilamb_dat[attributes["in_var"]],
-        evaluate_conversion_factor(attributes["time_conversion_factor"]),
-    )
+    if len(ilamb_dat.time) > 1:
+        # monthly mean
+        monthly_mean = calculate_monthly_mean(
+            ilamb_dat[attributes["in_var"]],
+            evaluate_conversion_factor(attributes["time_conversion_factor"]),
+        )
 
-    # regrided monthly mean
-    regridded_monthly = regrid_ilamb_ds(
-        monthly_mean.to_dataset(name=f"{attributes['out_var']}_monthly"),
-        target_grid,
-        f"{attributes['out_var']}_monthly",
-    )
+        # regrided monthly mean
+        regridded_monthly = regrid_ilamb_ds(
+            monthly_mean.to_dataset(name=f"{attributes['out_var']}_monthly"),
+            target_grid,
+            f"{attributes['out_var']}_monthly",
+        )
 
-    sum_monthly = regridded_monthly[f"{attributes['out_var']}_monthly"].sum(dim="month")
-    regridded_monthly = regridded_monthly.where(np.abs(sum_monthly) > 0.0)
+        sum_monthly = regridded_monthly[f"{attributes['out_var']}_monthly"].sum(dim="month")
+        regridded_monthly = regridded_monthly.where(np.abs(sum_monthly) > 0.0)
 
-    # calculate month of maximum value
-    month_of_max = calculate_month_of_max(
-        regridded_monthly[f"{attributes['out_var']}_monthly"]
-    ).to_dataset(name=f"{attributes['out_var']}_month_of_max")
+        # calculate month of maximum value
+        month_of_max = calculate_month_of_max(
+            regridded_monthly[f"{attributes['out_var']}_monthly"]
+        ).to_dataset(name=f"{attributes['out_var']}_month_of_max")
 
-    # get climatology
-    climatology_ds = get_ilamb_climatology(
-        regridded_monthly,
-        attributes["out_var"],
-        evaluate_conversion_factor(attributes["area_conversion_factor"]),
-    )
+        # get climatology
+        climatology_ds = get_ilamb_climatology(
+            regridded_monthly,
+            attributes["out_var"],
+            evaluate_conversion_factor(attributes["area_conversion_factor"]),
+        )
 
-    # return all files combined
-    return xr.merge([month_of_max, regridded_annual, climatology_ds])
+        # return all files combined
+        return xr.merge([month_of_max, regridded_annual, climatology_ds])
+    else:
+        return regridded_annual
 
 
 def get_ilamb_climatology(
@@ -211,6 +251,9 @@ def read_ilamb_data(
         "max_val": attributes.get("max_val", None),
         "min_val": attributes.get("min_val", None),
     }
+    if attributes['model'] == 'GEOCARBON':
+        filter_options['tstart'] = None
+        filter_options['tstop'] = None
 
     if attributes["out_var"] == "ef":
         le_dict, sh_dict = (
@@ -541,10 +584,10 @@ def get_annual_ds(
     # calculate annual values
     if len(ds.time) > 1:
         annual = calculate_annual_mean(ds[in_var], conversion_factor)
+        annual_ds = annual.to_dataset(name=out_var)
     else:
-        annual = ds[in_var].isel(time=0).drop_vars(["time"])
+        annual_ds = ds[in_var].isel(time=0).to_dataset(name=out_var)
 
-    annual_ds = annual.to_dataset(name=out_var)
     annual_ds[out_var].attrs["units"] = metadata["units"]
     annual_ds[out_var].attrs["long_name"] = metadata["longname"]
 
@@ -651,16 +694,18 @@ def compile_variable(var: str, models: list[str], out_dir: str) -> xr.Dataset:
     """
     datasets = []
     for model in models:
+        print(model, var)
         file_name = os.path.join(out_dir, f"{model}_{var.upper()}.nc")
         ds = xr.open_dataset(file_name)
         processed_ds = (
             get_average_and_iav(ds, var)
-            if var != "biomass"
+            if 'time' in ds.dims
             else ds[var].to_dataset(name=var)
         )
-        processed_ds[f"{var}_cycle"] = ds[f"{var}_cycle"]
-        processed_ds[f"{var}_month_of_max"] = ds[f"{var}_month_of_max"]
-        processed_ds[f"{var}_anomaly"] = ds[f"{var}_anomaly"]
+        if 'time' in ds.dims:
+            processed_ds[f"{var}_cycle"] = ds[f"{var}_cycle"]
+            processed_ds[f"{var}_month_of_max"] = ds[f"{var}_month_of_max"]
+            processed_ds[f"{var}_anomaly"] = ds[f"{var}_anomaly"]
         datasets.append(processed_ds)
 
     var_ds = xr.concat(datasets, dim="model", data_vars="all")

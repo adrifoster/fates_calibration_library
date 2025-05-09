@@ -13,9 +13,24 @@ PARAM_INFO = {
         "actual_param": "fates_nonhydro_smpsc",
         "default_value": np.array([189000]),
     },
+    "fates_leaf_slamax": {
+        "root_param": "fates_leaf_slatop",
+        "actual_param": "fates_leaf_slamax",
+        "default_value": np.array([0.0954]),
+    },
     "fates_stoich_nitr_1": {
         "actual_param": "fates_stoich_nitr",
         "array_index": 0
+    },
+    "fates_stoich_nitr_2": {
+        "actual_param": "fates_stoich_nitr",
+        "array_index": 1
+    },
+    "fates_allom_agb": {
+        "actual_param": ["fates_allom_agb1", "fates_allom_agb2"]
+    },
+    "fates_allom_d2bl": {
+        "actual_param": ["fates_allom_d2bl1", "fates_allom_d2bl2"]
     }
 }
 
@@ -316,10 +331,13 @@ def set_default_pftvals(
     """
 
     for pft in keep_pfts:
-        if len(dims) == 2:
-            param_value[0, pft - 1] = default_value[0, pft - 1]
+        idx = pft - 1
+        if param_value.ndim == 1:
+            param_value[idx] = default_value[idx]
+        elif param_value.ndim == 2:
+            param_value[:, idx] = default_value[:, idx]
         else:
-            param_value[pft - 1] = default_value[pft - 1]
+            raise ValueError(f"Unexpected number of dimensions: {param_value.ndim}")
 
     return param_value
 
@@ -334,6 +352,9 @@ def set_lh_param_value(
     parameter: str,
     keep_pfts: list[int],
     param_dat: dict,
+    i: int,
+    jags_dict: dict=None,
+    sample_dict: dict=None,
 ) -> xr.Dataset:
     """Sets a parameter value on an input dataset for a latin hypercube ensemble
 
@@ -351,7 +372,7 @@ def set_lh_param_value(
     Returns:
         xr.Dataset: output parameter set
     """
-
+    
     # get the actual parameter name (some could be proxies)
     if param_type == "default":
         actual_param_name = parameter
@@ -359,8 +380,12 @@ def set_lh_param_value(
         actual_param_name = PARAM_INFO[parameter]["actual_param"]
 
     # get default parameter values and dimensions
-    default_value = default_param_data[actual_param_name].values
-    dims = list(default_param_data[actual_param_name].dims)
+    if isinstance(actual_param_name, str):
+        default_value = default_param_data[actual_param_name].values
+        dims = default_param_data[actual_param_name].dims
+    else: 
+        default_value = [default_param_data[par].values for par in actual_param_name]
+        dims = list(default_param_data[par].dims for par in actual_param_name)
 
     if param_type == "default":
 
@@ -390,19 +415,39 @@ def set_lh_param_value(
     elif param_type == "array_index":
         
         param_value = get_lh_values(value, param_dat, parameter, default_value)
+        ds_value = ds[actual_param_name].values.copy()
         for i in range(len(param_value)):
             if i != PARAM_INFO[parameter]['array_index']:
-                param_value[i] = default_value[i]
+                param_value[i] = ds_value[i]
+                
+    elif param_type == 'jags':
+        param_dict = sample_dict[parameter]
+        param_value = get_sample_values(default_value, i, param_dict, jags_dict, parameter, 
+                                       actual_param_name)
+            
 
     # set default pfts if they are supplied
-    if len(keep_pfts) > 0 and "fates_pft" in dims:
+    if len(keep_pfts) > 0 and "fates_pft" in dims and param_type != 'jags':
         param_value = set_default_pftvals(param_value, default_value, keep_pfts, dims)
 
     # set the values
-    ds[actual_param_name].values = param_value
+    if param_type == 'jags':
+        for k, par in enumerate(actual_param_name):
+            ds[par].values = param_value[k]
+    else:
+        ds[actual_param_name].values = param_value
 
     return ds
 
+def get_sample_values(default_value, i, param_dict, jags_dict, parameter, actual_param_name):
+    
+        pfts = [int(pft.replace('pft_', '')) for pft in list(param_dict.keys())]
+        cols = list(jags_dict[parameter]['cols'].values())
+        for k, par in enumerate(actual_param_name):
+            for pft in pfts:
+                value = param_dict[f"pft_{pft}"].iloc[i,][cols[k]]
+                default_value[k][pft-1] = value
+        return default_value
 
 def create_lh_param_ensemble(
     params: list[str],
@@ -413,6 +458,7 @@ def create_lh_param_ensemble(
     param_prefix: str,
     lh_sample: np.ndarray[float]=None,
     keep_pfts: list[int] = None,
+    jags_dict: dict=None
 ):
     """Generates an ensemble of Latin Hypercube parameter files
 
@@ -445,6 +491,13 @@ def create_lh_param_ensemble(
 
     # get information about all parameter data
     main_param = param_dat["main"]
+    
+    sample_dict = {}
+    for par, info in jags_dict.items():
+        param_dict = {}
+        for pft, pft_dat in info['data'].items():
+            param_dict[pft] = pft_dat.sample(n=num_samples)
+        sample_dict[par] = param_dict
 
     # loop through each row of latin hypercube and create a parameter file
     for i, sample in enumerate(lh_sample):
@@ -469,6 +522,9 @@ def create_lh_param_ensemble(
                 params[j],
                 keep_pfts,
                 param_dat,
+                i,
+                jags_dict,
+                sample_dict
             )
 
         # output to file
@@ -581,12 +637,14 @@ def get_param_value(
         param_value = get_param_percent_change(change_str, default_value, oaat_type)
     else:
         param_value = get_param_numeric_change(change_str, default_value)
-
+        
     # reset values that should be -999.9
     if default_value.size == 1:
         if default_value == -999.9:
             param_value = -999.9
     else:
+        if default_value.shape != param_value.shape:
+            param_value = param_value.reshape(default_value.shape)
         param_value[default_value == -999.9] = -999.9
 
     return param_value

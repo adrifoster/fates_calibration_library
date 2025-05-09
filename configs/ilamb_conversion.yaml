@@ -21,7 +21,7 @@ GPP:
   diverging_cmap: False
 
 NEE:
-  models: [FLUXCOM]
+  models: [FLUXCOM, GBAF]
   var: nee
   long_name: net ecosystem exchange
   convert_units: PgC yr-1
@@ -33,7 +33,7 @@ NEE:
 
 
 LAI:
-  models: [AVHRR, AVH15C1]
+  models: [AVHRR, AVH15C1, GIMMS_LAI4g]
   var: lai
   long_name: leaf area index
   convert_units: null
@@ -143,7 +143,7 @@ RN:
   diverging_cmap: False 
 
 BIOMASS:
-  models: [ESACCI, GEOCARBON]
+  models: [ESACCI, GEOCARBON, XuSaatchi2021]
   var: biomass
   long_name: forest biomass
   convert_units: Tg
