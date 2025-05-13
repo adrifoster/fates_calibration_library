@@ -13,12 +13,12 @@ from fates_calibration_library.analysis_functions import (
     calculate_monthly_mean,
     calculate_annual_mean,
     calculate_month_of_max,
+    area_mean
 )
 from fates_calibration_library.utils import evaluate_conversion_factor
 from fates_calibration_library.surface_data_functions import extract_biome
 
-def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset,
-                          res: str):
+def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
     """Regrids all ILAMB dataset
 
     Args:
@@ -26,16 +26,15 @@ def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.D
         ilamb_dict (dict): Dictionary with ILAMB dataset information.
         target_grid (xr.Dataset): Target grid for regridding.
         clobber (bool): whether to overwrite files.
-        res (str): resolution string to use to make filename
     """
     # create output directory if it doesn't exist
-    os.makedirs(config_dict["out_dir"], exist_ok=True)
+    os.makedirs(config_dict["regrid_dir"], exist_ok=True)
     
     # regrid each dataset
     for dataset, attributes in ilamb_dict.items():
         out_file = os.path.join(
-            config_dict["out_dir"],
-            f"{attributes['model']}_{attributes['out_var'].upper()}_{res}.nc",
+            config_dict["regrid_dir"],
+            f"{attributes['model']}_{attributes['out_var'].upper()}_{config_dict['regrid_tag']}.nc",
         )
 
         # skip if file exists and clobber is False
@@ -61,10 +60,20 @@ def regrid_dataset(config_dict, ilamb_dict, attributes, target_grid):
     # read or compute ILAMB data
     ilamb_dat, original_file = read_ilamb_data(config_dict, ilamb_dict, attributes)
     
-    pass
+    # drop lat_bounds and lon_bounds if they exist in the dataset
+    bounds_vars = ['lat_bounds', 'lon_bounds', 'lat_bnds', 'lon_bnds']
+    to_drop = [var for var in bounds_vars if var in ilamb_dat.variables]
+    ilamb_dat = ilamb_dat.drop_vars(to_drop, errors='ignore')
+    
+    
+    ds = regrid_ilamb_ds(ilamb_dat, target_grid, attributes["in_var"])
+    ds.attrs["Original"] = original_file
+    ds.attrs["Date"] = str(date.today())
+    ds.attrs["Author"] = config_dict["user"]
 
-
-def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
+    return ds
+    
+def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict):
 
     # create output directory if it doesn't exist
     os.makedirs(config_dict["out_dir"], exist_ok=True)
@@ -81,7 +90,7 @@ def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Data
             print(f"File {out_file} for {dataset} exists, skipping")
             continue
 
-        ds_out = process_dataset(config_dict, ilamb_dict, attributes, target_grid)
+        ds_out = process_dataset(config_dict, ilamb_dict, attributes)
         ds_out.to_netcdf(out_file, mode="w")
 
 
@@ -89,7 +98,7 @@ def process_dataset(
     config_dict: dict,
     ilamb_dict: dict,
     attributes: dict,
-    target_grid: xr.DataArray,
+    
 ):
     """Handles reading, conversion, and regridding for a single dataset
 
@@ -98,71 +107,126 @@ def process_dataset(
         ilamb_dict (dict): Dictionary with ILAMB dataset information.
         dataset (str): ILAMB dataset name
         attributes (dict): dictionary with attributes about this ILAMB dataset
-        target_grid (xr.DataArray): target grid for regridding
     """
 
-    # read or compute ILAMB data
-    ilamb_dat, original_file = read_ilamb_data(config_dict, ilamb_dict, attributes)
+    # read in regions
+    region = xr.open_dataset(os.path.join(config_dict['top_dir'], 
+                                          'regions/GlobalLandNoAnt.nc'))
+    
+    # swap out 0.0 (land) for 1.0
+    region['ids'] = xr.where(region.ids == 0.0, 1.0, 0.0)
+    
+    # read in regridded dataset
+    file_name = os.path.join(
+        config_dict["regrid_dir"],
+        f"{attributes['model']}_{attributes['out_var'].upper()}_{config_dict['regrid_tag']}.nc",
+    )
+    regridded_dat = xr.open_dataset(file_name)
+    #if attributes['out_var'] == 'ef' or attributes['out_var'] == 'albedo':
+    #    regridded_dat = regridded_dat.where(regridded_dat[attributes['out_var']] > 0.0)
 
     # prepare metadata
     metadata = {
         "units": attributes["units"],
         "longname": attributes["longname"],
-        "original_file": original_file,
+        "original_file": file_name,
         "user": config_dict["user"],
     }
 
     # calculate annual dataset
     annual_ds = get_annual_ds(
-        ilamb_dat,
+        regridded_dat,
         attributes["in_var"],
         attributes["out_var"],
         evaluate_conversion_factor(attributes["time_conversion_factor"]),
         metadata,
     )
 
-    # regrid annual
-    regridded_annual = regrid_ilamb_ds(annual_ds, target_grid, attributes["out_var"])
-    if "year" in regridded_annual[attributes["out_var"]].dims:
-        sum_annual = regridded_annual[attributes["out_var"]].sum(dim="year")
-    else:
-        sum_annual = regridded_annual[attributes["out_var"]]
-    regridded_annual = regridded_annual.where(np.abs(sum_annual) > 0.0)
-
-    if len(ilamb_dat.time) > 1:
+    # set to na where 0.0
+    sum_annual = annual_ds[attributes["out_var"]].sum(dim='year')
+    annual_ds = annual_ds.where(np.abs(sum_annual) > 0.0)
+        
+    # read in raw data
+    ilamb_dat, original_file = read_ilamb_data(config_dict, ilamb_dict, attributes)
+    
+    # calculate cell areas
+    area_da = get_ilamb_land_area(ilamb_dat)
+    ilamb_dat['cell_area'] = area_da
+    
+    # regrid regions
+    region_regridder = xe.Regridder(region['ids'], ilamb_dat, 'bilinear')
+    region_regrid = region_regridder(region['ids'])
+    ilamb_dat['landfrac'] = region_regrid
+    ilamb_dat['land_area'] = ilamb_dat.landfrac*ilamb_dat.cell_area
+    
+    annual_original = get_annual_ds(
+        ilamb_dat,
+        attributes["in_var"],
+        attributes["out_var"],
+        evaluate_conversion_factor(attributes["time_conversion_factor"]),
+        metadata,
+    )
+    sum_annual = annual_original[attributes["out_var"]].sum(dim='year')
+    annual_original = annual_original.where(np.abs(sum_annual) > 0.0)
+    
+    global_mean = area_mean(annual_original[attributes["out_var"]].mean(dim='year'), 
+                            evaluate_conversion_factor(attributes["area_conversion_factor"]), 
+                            ilamb_dat['land_area']).to_dataset(name=f"{attributes['out_var']}_global")
+    
+    time_len = len(regridded_dat.time)
+    num_years = len(np.unique(regridded_dat['time.year']))
+    
+    if time_len > 1 and time_len > num_years:
+        
         # monthly mean
-        monthly_mean = calculate_monthly_mean(
+        monthly_mean = get_monthly_ds(
             ilamb_dat[attributes["in_var"]],
-            evaluate_conversion_factor(attributes["time_conversion_factor"]),
-        )
-
-        # regrided monthly mean
-        regridded_monthly = regrid_ilamb_ds(
-            monthly_mean.to_dataset(name=f"{attributes['out_var']}_monthly"),
-            target_grid,
             f"{attributes['out_var']}_monthly",
+            evaluate_conversion_factor(attributes["time_conversion_factor"]),
+            metadata
         )
-
-        sum_monthly = regridded_monthly[f"{attributes['out_var']}_monthly"].sum(dim="month")
-        regridded_monthly = regridded_monthly.where(np.abs(sum_monthly) > 0.0)
+        monthly_mean['land_area'] = ilamb_dat.landfrac*ilamb_dat.cell_area
+        
+        regridded_monthly_mean = get_monthly_ds(
+            regridded_dat[attributes["in_var"]],
+            f"{attributes['out_var']}_monthly",
+            evaluate_conversion_factor(attributes["time_conversion_factor"]),
+            metadata
+        )
 
         # calculate month of maximum value
         month_of_max = calculate_month_of_max(
-            regridded_monthly[f"{attributes['out_var']}_monthly"]
+            regridded_monthly_mean[f"{attributes['out_var']}_monthly"]
         ).to_dataset(name=f"{attributes['out_var']}_month_of_max")
-
+        
+    
         # get climatology
         climatology_ds = get_ilamb_climatology(
-            regridded_monthly,
+            monthly_mean,
             attributes["out_var"],
             evaluate_conversion_factor(attributes["area_conversion_factor"]),
         )
 
         # return all files combined
-        return xr.merge([month_of_max, regridded_annual, climatology_ds])
+        return xr.merge([annual_ds, global_mean, month_of_max, climatology_ds])
     else:
-        return regridded_annual
+        return xr.merge([annual_ds, global_mean])
 
+def get_ilamb_land_area(ds):
+    
+    lats = ds.lat.values
+    lons = ds.lon.values
+
+    areas = cell_areas(lats, lons)
+    area_da = xr.DataArray(
+        areas*1e-6,
+        dims=['lat', 'lon'],
+        coords={'lat': lats, 'lon': lons},
+        name='cell_area',
+        attrs={'units': 'km2', 'description': 'grid cell area'}
+    )
+
+    return area_da
 
 def get_ilamb_climatology(
     monthly_mean: xr.DataArray, out_var: str, area_cf
@@ -246,14 +310,11 @@ def read_ilamb_data(
 
     # create the filter_options dictionary
     filter_options = {
-        "tstart": config.get("start_date", None),
-        "tstop": config.get("end_date", None),
+        "tstart": None,
+        "tstop": None,
         "max_val": attributes.get("max_val", None),
         "min_val": attributes.get("min_val", None),
     }
-    if attributes['model'] == 'GEOCARBON':
-        filter_options['tstart'] = None
-        filter_options['tstop'] = None
 
     if attributes["out_var"] == "ef":
         le_dict, sh_dict = (
@@ -315,6 +376,32 @@ def read_ilamb_data(
 
     return ilamb_dat, original_file
 
+def get_monthly_ds(ds: xr.Dataset, out_var: str, conversion_factor: float,
+                   metadata: Dict[str, str]) -> xr.Dataset:
+    """Calculates a monthly dataset from an input dataset for variable in_var
+
+    Args:
+        ds (xr.Dataset): input dataset
+        in_var (str): variable to calculate annual values
+        out_var (str): name of output monthly variable
+        conversion_factor (float): conversion factor to go to monthly values
+        metadata (dict): Dictionary containing:
+            - 'units' (str): Units of the output variable.
+            - 'longname' (str): Long name of the variable.
+            - 'original_file' (str): Path to the original file.
+            - 'user' (str): User's name.
+
+    Returns:
+        xr.Dataset: output dataset
+    """
+    
+    monthly_ds = calculate_monthly_mean(ds, conversion_factor).to_dataset(name=out_var)
+    sum_monthly = monthly_ds[out_var].sum(dim="month")
+    monthly_ds = monthly_ds.where(np.abs(sum_monthly) > 0.0)
+    monthly_ds[out_var].attrs["units"] = metadata["units"]
+    monthly_ds[out_var].attrs["long_name"] = metadata["longname"]
+    
+    return monthly_ds    
 
 def get_ilamb_ds(
     file_info: Dict[str, str], in_var: str, filter_options: Dict[str, Optional[float]]
@@ -550,8 +637,8 @@ def cell_areas(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     lats = lats.clip(-90, 90)
     lats *= np.pi / 180.0
 
-    dlons = earth_radius * (lons[1:] - lons[:-1])
-    dlats = earth_radius * (np.sin(lats[1:]) - np.sin(lats[:-1]))
+    dlons = np.abs(earth_radius * (lons[1:] - lons[:-1]))
+    dlats = np.abs(earth_radius * (np.sin(lats[1:]) - np.sin(lats[:-1])))
     areas = np.outer(dlons, dlats).T
 
     return areas
@@ -583,10 +670,12 @@ def get_annual_ds(
 
     # calculate annual values
     if len(ds.time) > 1:
-        annual = calculate_annual_mean(ds[in_var], conversion_factor)
-        annual_ds = annual.to_dataset(name=out_var)
+       annual = calculate_annual_mean(ds[in_var], conversion_factor)
+       annual_ds = annual.to_dataset(name=out_var)
     else:
-        annual_ds = ds[in_var].isel(time=0).to_dataset(name=out_var)
+        year = ds['time.year'].values[0]
+        annual_ds = ds[in_var].isel(time=0).to_dataset(name=out_var).drop_vars('time')
+        annual_ds = annual_ds.expand_dims(year=[year]).assign_coords(year=('year', [year]))
 
     annual_ds[out_var].attrs["units"] = metadata["units"]
     annual_ds[out_var].attrs["long_name"] = metadata["longname"]
@@ -619,15 +708,13 @@ def regrid_ilamb_ds(
         xr.Dataset: output dataset
     """
 
-    # fill NAs with 0
+    # create mask
     ds[var] = ds[var].fillna(0)
-
-    # regrid
-    regridder = xe.Regridder(ds, target_grid, method)
-    ds_regrid = regridder(ds)
-    ds_regrid[var] = ds_regrid[var] * target_grid.landmask
+    
+    regridder = xe.Regridder(ds[var], target_grid, method)
+    ds_regrid = regridder(ds[var]).to_dataset(name=var)
+    ds_regrid[var] = ds_regrid[var]*target_grid.landmask
     ds_regrid[var].attrs = ds[var].attrs
-
     ds_regrid.attrs = ds.attrs
 
     return ds_regrid
@@ -694,18 +781,18 @@ def compile_variable(var: str, models: list[str], out_dir: str) -> xr.Dataset:
     """
     datasets = []
     for model in models:
-        print(model, var)
         file_name = os.path.join(out_dir, f"{model}_{var.upper()}.nc")
         ds = xr.open_dataset(file_name)
         processed_ds = (
             get_average_and_iav(ds, var)
-            if 'time' in ds.dims
+            if 'year' in ds.dims
             else ds[var].to_dataset(name=var)
         )
-        if 'time' in ds.dims:
+        if 'month' in ds.dims:
             processed_ds[f"{var}_cycle"] = ds[f"{var}_cycle"]
             processed_ds[f"{var}_month_of_max"] = ds[f"{var}_month_of_max"]
             processed_ds[f"{var}_anomaly"] = ds[f"{var}_anomaly"]
+        processed_ds[f"{var}_global"] = ds[f"{var}_global"]
         datasets.append(processed_ds)
 
     var_ds = xr.concat(datasets, dim="model", data_vars="all")

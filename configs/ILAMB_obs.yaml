@@ -1,28 +1,93 @@
-CERESed4.1_ALBEDO:
-  sub_dir: albedo
-  model: CERESed4.1
-  filename: null
-  in_var: albedo
-  out_var: albedo
-  time_conversion_factor: null
-  area_conversion_factor: null
-  max_val: null
+FLUXCOM_GPP:
+  sub_dir: gpp
+  model: FLUXCOM
+  filename: gpp.nc
+  in_var: gpp
+  out_var: gpp
+  time_conversion_factor: 0.001
+  area_conversion_factor: 1.0e-6
+  max_val: 500
   min_val: null
-  units:  0-1
-  longname: all sky albedo
+  units: kgC m-2 yr-1
+  longname: gross primary production
 
-GEWEX.SRB_ALBEDO:
-  sub_dir: albedo
-  model: GEWEX.SRB
-  filename: null
-  in_var: albedo
-  out_var: albedo
+WECANN_GPP:
+  sub_dir: gpp
+  model: WECANN
+  filename: gpp.nc
+  in_var: gpp
+  out_var: gpp
+  time_conversion_factor: 0.001
+  area_conversion_factor: 1.0e-6
+  max_val: 500
+  min_val: null
+  units: kgC m-2 yr-1
+  longname: gross primary production
+
+GBAF_GPP:
+  sub_dir: gpp
+  model: GBAF
+  filename: gpp_0.5x0.5.nc
+  in_var: gpp
+  out_var: gpp
+  time_conversion_factor: 86400.0
+  area_conversion_factor: 1.0e-6
+  max_val: null
+  min_val: null
+  units: kgC m-2 yr-1
+  longname: gross primary production
+  
+AVHRR_LAI:
+  sub_dir: lai
+  model: AVHRR
+  filename: lai_0.5x0.5.nc
+  in_var: lai
+  out_var: lai
   time_conversion_factor: null
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  0-1
-  longname: all sky albedo
+  units: m2 m-2
+  longname: leaf area index
+
+AVH15C1_LAI:
+  sub_dir: lai
+  model: AVH15C1
+  filename: lai.nc
+  in_var: lai
+  out_var: lai
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units: m2 m-2
+  longname: leaf area index
+  
+GIMMS_LAI:
+  sub_dir: lai
+  model: GIMMS_LAI4g
+  filename: cao2023_lai.nc
+  in_var: lai
+  out_var: lai
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units: m2 m-2
+  longname: leaf area index
+  
+MODIS_LAI:
+  sub_dir: lai
+  model: MODIS
+  filename: lai_0.5x0.5.nc
+  in_var: lai
+  out_var: lai
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units: m2 m-2
+  longname: leaf area index
   
 ESACCI_BIOMASS:
   sub_dir: biomass
@@ -76,58 +141,6 @@ XUSAATCHI_BIOMASS:
   units:  MgC ha-1
   longname: global above and belowground woody carbon
   
-GFED4.1S_BURNTAREA:
-  sub_dir: burntArea
-  model: GFED4.1S
-  filename: burntArea.nc
-  in_var: burntArea
-  out_var: burntarea
-  time_conversion_factor: null
-  area_conversion_factor: 1.0
-  max_val: null
-  min_val: null
-  units:  percent
-  longname: burned area
-
-FLUXCOM_GPP:
-  sub_dir: gpp
-  model: FLUXCOM
-  filename: gpp.nc
-  in_var: gpp
-  out_var: gpp
-  time_conversion_factor: 0.001
-  area_conversion_factor: 1.0e-6
-  max_val: 500
-  min_val: null
-  units: kgC m-2 yr-1
-  longname: gross primary production
-
-WECANN_GPP:
-  sub_dir: gpp
-  model: WECANN
-  filename: gpp.nc
-  in_var: gpp
-  out_var: gpp
-  time_conversion_factor: 0.001
-  area_conversion_factor: 1.0e-6
-  max_val: 500
-  min_val: null
-  units: kgC m-2 yr-1
-  longname: gross primary production
-
-GBAF_GPP:
-  sub_dir: gpp
-  model: GBAF
-  filename: gpp_0.5x0.5.nc
-  in_var: gpp
-  out_var: gpp
-  time_conversion_factor: 86400.0
-  area_conversion_factor: 1.0e-6
-  max_val: null
-  min_val: null
-  units: kgC m-2 yr-1
-  longname: gross primary production
-
 FLUXCOM_NEE:
   sub_dir: nee
   model: FLUXCOM
@@ -154,45 +167,110 @@ GBAF_NEE:
   units: kgC m-2 yr-1
   longname: net ecosystem exchange
 
-AVHRR_LAI:
-  sub_dir: lai
-  model: AVHRR
-  filename: lai_0.5x0.5.nc
-  in_var: lai
-  out_var: lai
+GFED4.1S_BURNTAREA:
+  sub_dir: burntArea
+  model: GFED4.1S
+  filename: burntArea.nc
+  in_var: burntArea
+  out_var: burntarea
   time_conversion_factor: null
-  area_conversion_factor: null
+  area_conversion_factor: 1.0
   max_val: null
   min_val: null
-  units: m2 m-2
-  longname: leaf area index
-
-AVH15C1_LAI:
-  sub_dir: lai
-  model: AVH15C1
-  filename: lai.nc
-  in_var: lai
-  out_var: lai
-  time_conversion_factor: null
-  area_conversion_factor: null
-  max_val: null
-  min_val: null
-  units: m2 m-2
-  longname: leaf area index
+  units:  percent
+  longname: burned area
   
-GIMMS_LAI:
-  sub_dir: lai
-  model: GIMMS_LAI4g
-  filename: cao2023_lai.nc
-  in_var: lai
-  out_var: lai
+GLEAMv3.3a_ET:
+  sub_dir: evspsbl
+  model: GLEAMv3.3a
+  filename: et.nc
+  in_var: et
+  out_var: et
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units: mm day-1
+  longname: evapotranspiration
+
+MODIS_ET:
+  sub_dir: evspsbl
+  model: MODIS
+  filename: et_0.5x0.5.nc
+  in_var: et
+  out_var: et
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units: mm day-1
+  longname: evapotranspiration
+
+MOD16A2_ET:
+  sub_dir: evspsbl
+  model: MOD16A2
+  filename: et.nc
+  in_var: et
+  out_var: et
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units: mm day-1
+  longname: evapotranspiration
+  
+FLUXCOM_EF:
+  sub_dir: null
+  model: FLUXCOM
+  filename: null
+  in_var: ef
+  out_var: ef
   time_conversion_factor: null
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units: m2 m-2
-  longname: leaf area index
+  units:  0-1
+  longname: evaporative fraction
 
+CLASS_EF:
+  sub_dir: null
+  model: CLASS
+  filename: null
+  in_var: ef
+  out_var: ef
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  0-1
+  longname: evaporative fraction
+
+WECANN_EF:
+  sub_dir: null
+  model: WECANN
+  filename: null
+  in_var: ef
+  out_var: ef
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  0-1
+  longname: evaporative fraction
+
+GBAF_EF:
+  sub_dir: null
+  model: GBAF
+  filename: null
+  in_var: ef
+  out_var: ef
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  0-1
+  longname: evaporative fraction
+  
 FLUXCOM_LE:
   sub_dir: hfls
   model: FLUXCOM
@@ -257,7 +335,37 @@ DOLCE_LE:
   min_val: null
   units:  W m-2
   longname: latent heat flux
+  
+LORA_MRRO:
+  sub_dir: mrro
+  model: LORA
+  filename: LORA.nc
+  in_var: mrro
+  out_var: mrro
+  time_conversion_factor: 
+    operation: multiply
+    operands: [24.0, 60.0, 60.0, 365.0]
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  mm day-1
+  longname: surface runoff
 
+CLASS_MRRO:
+  sub_dir: mrro
+  model: CLASS
+  filename: mrro.nc
+  in_var: mrro
+  out_var: mrro
+  time_conversion_factor: 
+    operation: multiply
+    operands: [24.0, 60.0, 60.0, 365.0]
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  mm day-1
+  longname: surface runoff
+  
 FLUXCOM_SH:
   sub_dir: hfss
   model: FLUXCOM
@@ -309,37 +417,7 @@ GBAF_SH:
   min_val: null
   units:  W m-2
   longname: sensible heat flux
-
-LORA_MRRO:
-  sub_dir: mrro
-  model: LORA
-  filename: LORA.nc
-  in_var: mrro
-  out_var: mrro
-  time_conversion_factor: 
-    operation: multiply
-    operands: [24.0, 60.0, 60.0, 365.0]
-  area_conversion_factor: null
-  max_val: null
-  min_val: null
-  units:  mm day-1
-  longname: surface runoff
-
-CLASS_MRRO:
-  sub_dir: mrro
-  model: CLASS
-  filename: mrro.nc
-  in_var: mrro
-  out_var: mrro
-  time_conversion_factor: 
-    operation: multiply
-    operands: [24.0, 60.0, 60.0, 365.0]
-  area_conversion_factor: null
-  max_val: null
-  min_val: null
-  units:  mm day-1
-  longname: surface runoff
-
+  
 WangMao_SW:
   sub_dir: mrsos
   model: WangMao
@@ -352,37 +430,36 @@ WangMao_SW:
   min_val: null
   units:  kg m-2
   longname: surface soil moisture
-
-
-CERESed4.1_RSDS:
-  sub_dir: rsds
-  model: CERESed4.1
-  filename: rsds.nc
-  in_var: rsds
-  out_var: rsds
+  
+CERESed4.2_ALBEDO:
+  sub_dir: albedo
+  model: CERESed4.2
+  filename: null
+  in_var: albedo
+  out_var: albedo
   time_conversion_factor: null
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  W m-2
-  longname: shortwave flux down
+  units:  0-1
+  longname: all sky albedo
 
-GEWEX.SRB_RSDS:
-  sub_dir: rsds
+GEWEX.SRB_ALBEDO:
+  sub_dir: albedo
   model: GEWEX.SRB
-  filename: rsds_0.5x0.5.nc
-  in_var: rsds
-  out_var: rsds
+  filename: null
+  in_var: albedo
+  out_var: albedo
   time_conversion_factor: null
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  W m-2
-  longname: shortwave flux down
+  units:  0-1
+  longname: all sky albedo
 
-CERESed4.1_FSR:
+CERESed4.2_FSR:
   sub_dir: rsus
-  model: CERESed4.1
+  model: CERESed4.2
   filename: rsus.nc
   in_var: rsus
   out_var: fsr
@@ -404,11 +481,11 @@ GEWEX.SRB_FSR:
   max_val: null
   min_val: null
   units:  W m-2
-  longname: surface upward shortwave radiation flux
-
-CERESed4.1_FSA:
+  longname: surface upward shortwave radiation flux  
+  
+CERESed4.2_FSA:
   sub_dir: rsns
-  model: CERESed4.1
+  model: CERESed4.2
   filename: rsns.nc
   in_var: rsns
   out_var: fsa
@@ -431,10 +508,10 @@ GEWEX.SRB_FSA:
   min_val: null
   units:  W m-2
   longname: surface net shortwave radiation flux
-
-CERESed4.1_FIRE:
+  
+CERESed4.2_FIRE:
   sub_dir: rlus
-  model: CERESed4.1
+  model: CERESed4.2
   filename: rlus.nc
   in_var: rlus
   out_var: fire
@@ -458,9 +535,9 @@ GEWEX.SRB_FIRE:
   units:  W m-2
   longname: surface upward longwave radiation flux
 
-CERESed4.1_RLNS:
+CERESed4.2_RLNS:
   sub_dir: rlns
-  model: CERESed4.1
+  model: CERESed4.2
   filename: rlns.nc
   in_var: rlns
   out_var: rlns
@@ -483,10 +560,10 @@ GEWEX.SRB_RLNS:
   min_val: null
   units:  W m-2
   longname: surface net longwave radiation flux
-
-CERESed4.1_RN:
+  
+CERESed4.2_RN:
   sub_dir: rns
-  model: CERESed4.1
+  model: CERESed4.2
   filename: rns.nc
   in_var: rns
   out_var: rn
@@ -522,7 +599,7 @@ CLASS_RN:
   min_val: null
   units:  W m-2
   longname: surface net radiation
-
+  
 CLASS_GR:
   sub_dir: hfdsl
   model: CLASS
@@ -536,54 +613,184 @@ CLASS_GR:
   units:  W m-2
   longname: ground heat radiation flux
 
-FLUXCOM_EF:
-  sub_dir: null
-  model: FLUXCOM
-  filename: null
-  in_var: ef
-  out_var: ef
+CRU4.02_TSA:
+  sub_dir: tas
+  model: CRU4.02
+  filename: tas.nc
+  in_var: tas
+  out_var: tas
   time_conversion_factor: null
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  0-1
-  longname: evaporative fraction
+  units:  K
+  longname: 2-meter air temperature
 
-CLASS_EF:
-  sub_dir: null
+CRU4.02_TMIN:
+  sub_dir: tasmin
+  model: CRU4.02
+  filename: tasmin.nc
+  in_var: tasmin
+  out_var: tasmin
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  K
+  longname: 2-meter minimum air temperature
+  
+CRU4.02_TMAX:
+  sub_dir: tasmax
+  model: CRU4.02
+  filename: tasmax.nc
+  in_var: tasmax
+  out_var: tasmax
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  K
+  longname: 2-meter maximum air temperature
+
+CRU4.02_DTR:
+  sub_dir: dtr
+  model: CRU4.02
+  filename: dtr.nc
+  in_var: dtr
+  out_var: dtr
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  K
+  longname: 2-meter diurnal air temperature range
+  
+CMAPv1904_PR:
+  sub_dir: pr
+  model: CMAPv1904
+  filename: pr.nc
+  in_var: pr
+  out_var: pr
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  mm d-1
+  longname: average monthly rate of precipitation
+  
+GPCCv2018_PR:
+  sub_dir: pr
+  model: GPCCv2018
+  filename: pr.nc
+  in_var: pr
+  out_var: pr
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  mm d-1
+  longname: average monthly rate of precipitation
+  
+GPCPv2.3_PR:
+  sub_dir: pr
+  model: GPCPv2.3
+  filename: pr.nc
+  in_var: pr
+  out_var: pr
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  mm d-1
+  longname: average monthly rate of precipitation
+  
+CLASS_PR:
+  sub_dir: pr
   model: CLASS
-  filename: null
-  in_var: ef
-  out_var: ef
+  filename: pr.nc
+  in_var: pr
+  out_var: pr
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  mm d-1
+  longname: average monthly rate of precipitation
+  
+ERA5_RH:
+  sub_dir: rhums
+  model: ERA5
+  filename: rhums.nc
+  in_var: rhums
+  out_var: rhums
   time_conversion_factor: null
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  0-1
-  longname: evaporative fraction
+  units:  percent
+  longname: 2-m relative humidity
+  
+CRU4.02_RH:
+  sub_dir: rhums
+  model: CRU4.02
+  filename: rhums.nc
+  in_var: rhums
+  out_var: rhums
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  percent
+  longname: 2-m relative humidity
 
-WECANN_EF:
-  sub_dir: null
-  model: WECANN
-  filename: null
-  in_var: ef
-  out_var: ef
+CERESed4.2_RSDS:
+  sub_dir: rsds
+  model: CERESed4.2
+  filename: rsds.nc
+  in_var: rsds
+  out_var: rsds
   time_conversion_factor: null
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  0-1
-  longname: evaporative fraction
+  units:  W m-2
+  longname: shortwave flux down
 
-GBAF_EF:
-  sub_dir: null
-  model: GBAF
-  filename: null
-  in_var: ef
-  out_var: ef
+GEWEX.SRB_RSDS:
+  sub_dir: rsds
+  model: GEWEX.SRB
+  filename: rsds_0.5x0.5.nc
+  in_var: rsds
+  out_var: rsds
   time_conversion_factor: null
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  0-1
-  longname: evaporative fraction
+  units:  W m-2
+  longname: shortwave flux down
+
+CERESed4.2_FLDS:
+  sub_dir: rlds
+  model: CERESed4.2
+  filename: rlds.nc
+  in_var: rlds
+  out_var: rlds
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  W m-2
+  longname: longwave flux down
+
+GEWEX.SRB_FLDS:
+  sub_dir: rlds
+  model: GEWEX.SRB
+  filename: rlds_0.5x0.5.nc
+  in_var: rlds
+  out_var: rlds
+  time_conversion_factor: null
+  area_conversion_factor: null
+  max_val: null
+  min_val: null
+  units:  W m-2
+  longname: longwave flux down

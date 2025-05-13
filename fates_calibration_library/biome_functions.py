@@ -94,7 +94,7 @@ def get_global_whittaker_vars(clm_sim: xr.Dataset):
     """
 
     # calculate temperature, precipitation, and gpp for each gridcell
-    tbot = calculate_annual_mean(clm_sim.TBOT).mean(dim="year") - 273.15  # degC
+    tsa = calculate_annual_mean(clm_sim.TSA).mean(dim="year") - 273.15  # degC
 
     conversion_factor = 24 * 60 * 60 * 365 / 10
     rain = conversion_factor * calculate_annual_mean(clm_sim.RAIN).mean(
@@ -107,7 +107,7 @@ def get_global_whittaker_vars(clm_sim: xr.Dataset):
 
     gpp = calculate_annual_mean(clm_sim.GPP).mean(dim="year")
 
-    return tbot, prec, gpp
+    return tsa, prec, gpp
 
 
 def read_in_clm_sim(clm_dir: str):

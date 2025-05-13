@@ -123,4 +123,30 @@ BTRANMN:
   cmap: BrBG
   diverging_cmap: False
   long_name: Minimum BTRAN
+  
+Temp:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: degrees C
+  global_units: degrees C
+  cmap: jet
+  diverging_cmap: False
+  long_name: 2-m air temperature
 
+RH2M:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: percent
+  global_units: percent
+  cmap: BrBG
+  diverging_cmap: False
+  long_name: 2-m relative humidity
+
+Precip:
+  time_conversion_factor: 3153600.0
+  area_conversion_factor: null
+  annual_units: cm
+  global_units: cm
+  cmap: BrBG
+  diverging_cmap: False
+  long_name: 2-m relative humidity

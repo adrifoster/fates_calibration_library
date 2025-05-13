@@ -97,35 +97,6 @@ def calculate_zonal_mean(
     return by_lat
 
 
-def get_sparse_climatology(
-    da: xr.DataArray,
-    cf_time: float,
-    cf_area: float,
-    biome: xr.Dataset,
-    land_area: xr.DataArray,
-) -> xr.DataArray:
-    """Calculates mean monthly values for an input dataset and variable for a sparse grid dataset
-
-    Args:
-        da (xr.Dataset): input data array
-        cf_time (float): conversion factor for time averaging
-        cf_area (float): conversion factor for area averaging
-        biome (xr.Dataset): Whittaker biome dataset
-        land_area (xr.DataArray): land area [km2]
-
-    Returns:
-        xr.DataArray: output data array
-    """
-
-    months = da["time.daysinmonth"]
-    monthly_mean = cf_time * (months * da).groupby("time.month").mean()
-    monthly_global = area_mean_from_sparse(
-        monthly_mean, biome, "global", cf_area, land_area
-    )
-
-    return monthly_global
-
-
 def calculate_month_of_max(monthly_mean: xr.DataArray) -> xr.DataArray:
     """Calculates the month of the maximum value of a monthly data array
 
@@ -156,19 +127,60 @@ def calculate_annual_mean(
         xr.DataArray: output DataArray
     """
 
+    
     months = data_array["time.daysinmonth"]
 
     if conversion_factor is None:
-        conversion_factor = 1 / 365
+        
+        # multiply by number of days in month
+        weighted = data_array * data_array["time.daysinmonth"]
 
-    annual_mean = (
-        conversion_factor * (months * data_array).groupby("time.year").sum()
-    )
+        # Compute number of valid days per year
+        valid_days = data_array["time.daysinmonth"].where(data_array.notnull())
+
+        # Group and sum weighted data and valid days
+        annual_sum = weighted.groupby("time.year").sum(dim="time", skipna=True)
+        days_per_year = valid_days.groupby("time.year").sum(dim="time", skipna=True)
+
+        # compute annual mean as (sum of weighted data ) / (valid days)
+        annual_mean = annual_sum / days_per_year
+        
+    else:
+
+        annual_mean = (
+            conversion_factor * (months * data_array).groupby("time.year").sum()
+        )
+    
     annual_mean.name = data_array.name
     if new_units != "":
         annual_mean.attrs["units"] = new_units
+        
     return annual_mean
 
+
+# def calculate_monthly_mean(
+#     data_array: xr.DataArray, conversion_factor: float = None
+# ) -> xr.DataArray:
+#     """Calculates monthly mean of an input DataArray, applies a conversion factor
+
+#     Args:
+#         da (xr.DataArray): input DataArray
+#         conversion_factor (float): conversion factor
+
+#     Returns:
+#         xr.DataArray: output DataArray
+#     """
+
+#     months = data_array["time.daysinmonth"]
+
+#     if conversion_factor is None:
+#         conversion_factor = 1.0
+
+#     monthly_mean = (conversion_factor * data_array * months).groupby("time.month").sum(
+#         dim="time"
+#     ) / months.groupby("time.month").sum(dim="time")
+#     monthly_mean.name = data_array.name
+#     return monthly_mean
 
 def calculate_monthly_mean(
     data_array: xr.DataArray, conversion_factor: float = None
@@ -176,21 +188,24 @@ def calculate_monthly_mean(
     """Calculates monthly mean of an input DataArray, applies a conversion factor
 
     Args:
-        da (xr.DataArray): input DataArray
-        conversion_factor (float): conversion factor
+        data_array (xr.DataArray): input DataArray
+        conversion_factor (float): optional scaling factor
 
     Returns:
         xr.DataArray: output DataArray
     """
-
     months = data_array["time.daysinmonth"]
 
     if conversion_factor is None:
         conversion_factor = 1.0
 
-    monthly_mean = (conversion_factor * data_array * months).groupby("time.month").sum(
-        dim="time"
-    ) / months.groupby("time.month").sum(dim="time")
+    weighted = conversion_factor * data_array * months
+    valid_days = months.where(data_array.notnull())
+
+    monthly_sum = weighted.groupby("time.month").sum(dim="time", skipna=True)
+    total_days = valid_days.groupby("time.month").sum(dim="time", skipna=True)
+
+    monthly_mean = monthly_sum / total_days
     monthly_mean.name = data_array.name
     return monthly_mean
 
@@ -429,7 +444,9 @@ def get_clm_ds(
     ds["EF"].attrs["units"] = "unitless"
     ds["EF"].attrs["long_name"] = "Evaporative fraction"
 
-    ds["ASA"] = ds.FSR / ds.FSDS.where(ds.FSDS > 0)
+    rsds = ds.FSDS.where(ds.FSDS >= 10)
+    rsus = ds.FSR.where(ds.FSDS >= 10)
+    ds["ASA"] = rsus / rsds
     ds["ASA"].attrs["units"] = "unitless"
     ds["ASA"].attrs["long_name"] = "All sky albedo"
 
@@ -441,14 +458,22 @@ def get_clm_ds(
     ds["RN"].attrs["units"] = "W m-2"
     ds["RN"].attrs["long_name"] = "surface net radiation"
 
-    ds["TempAir"] = ds.TBOT - 273.15
-    ds["TempAir"].attrs["units"] = "degrees C"
-    ds["TempAir"].attrs["long_name"] = ds["TBOT"].attrs["long_name"]
-
     ds["Temp"] = ds.TSA - 273.15
     ds["Temp"].attrs["units"] = "degrees C"
     ds["Temp"].attrs["long_name"] = ds["TSA"].attrs["long_name"]
-
+    
+    ds['Precip'] = ds.SNOW + ds.RAIN
+    ds["Precip"].attrs["units"] = "mm s-1"
+    ds["Precip"].attrs["long_name"] = "total precipitation"
+    
+    ds["ET"] = ds.QVEGE + ds.QVEGT + ds.QSOIL
+    ds["ET"].attrs["units"] = ds["QVEGE"].attrs["units"]
+    ds["ET"].attrs["long_name"] = "evapotranspiration"
+    
+    ds["DTR"] = ds.TREFMXAV - ds.TREFMNAV
+    ds["DTR"].attrs["units"] = ds["TREFMXAV"].attrs["units"]
+    ds["DTR"].attrs["long_name"] = "diurnal temperature range"
+    
     if run_dict.get("sparse", True):
         ds0 = xr.open_dataset(files[0])
         extras = ["grid1d_lat", "grid1d_lon"]
@@ -521,6 +546,7 @@ def area_mean(da: xr.DataArray, cf: float, land_area: xr.DataArray) -> xr.DataAr
     """
 
     # update conversion factor if need be
+    land_area = land_area.where(~np.isnan(da))
     if cf is None:
         cf = 1 / land_area.sum(dim=["lat", "lon"]).values
 

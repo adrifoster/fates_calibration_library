@@ -1,5 +1,5 @@
 ASA:
-  models: [CERESed4.1, GEWEX.SRB]
+  models: [CERESed4.2, GEWEX.SRB]
   var: albedo
   long_name: albedo
   convert_units: null
@@ -88,7 +88,7 @@ SW:
   diverging_cmap: False 
 
 FSR:
-  models: [CERESed4.1, GEWEX.SRB]
+  models: [CERESed4.2, GEWEX.SRB]
   var: fsr
   long_name: surface upward shortwave radiation flux
   convert_units: null
@@ -99,7 +99,7 @@ FSR:
   diverging_cmap: False 
 
 FSA:
-  models: [CERESed4.1, GEWEX.SRB]
+  models: [CERESed4.2, GEWEX.SRB]
   var: fsa
   long_name: surface net shortwave radiation flux
   convert_units: null
@@ -110,7 +110,7 @@ FSA:
   diverging_cmap: False
 
 FIRE:
-  models: [CERESed4.1, GEWEX.SRB]
+  models: [CERESed4.2, GEWEX.SRB]
   var: fire
   long_name: surface upward longwave radiation flux
   convert_units: null
@@ -121,7 +121,7 @@ FIRE:
   diverging_cmap: False
 
 RLNS:
-  models: [CERESed4.1, GEWEX.SRB]
+  models: [CERESed4.2, GEWEX.SRB]
   var: rlns
   long_name: surface net longwave radiation flux
   convert_units: null
@@ -132,7 +132,7 @@ RLNS:
   diverging_cmap: False
 
 RN:
-  models: [CERESed4.1, GEWEX.SRB]
+  models: [CERESed4.2, GEWEX.SRB]
   var: rn
   long_name: net radiation
   convert_units: null
