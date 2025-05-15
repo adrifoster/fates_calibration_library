@@ -109,6 +109,13 @@ def calculate_month_of_max(monthly_mean: xr.DataArray) -> xr.DataArray:
 
     # calculate the month of the maximum value
     month_of_max = monthly_mean.idxmax(dim="month")
+    
+    is_flat = (monthly_mean.max("month") - monthly_mean.min("month")) == 0
+    all_nan = monthly_mean.isnull().all(dim="month")
+    
+    month_of_max = month_of_max.where(~is_flat, other=1)
+    month_of_max = month_of_max.where(~all_nan)
+    
 
     return month_of_max
 
@@ -158,30 +165,6 @@ def calculate_annual_mean(
     return annual_mean
 
 
-# def calculate_monthly_mean(
-#     data_array: xr.DataArray, conversion_factor: float = None
-# ) -> xr.DataArray:
-#     """Calculates monthly mean of an input DataArray, applies a conversion factor
-
-#     Args:
-#         da (xr.DataArray): input DataArray
-#         conversion_factor (float): conversion factor
-
-#     Returns:
-#         xr.DataArray: output DataArray
-#     """
-
-#     months = data_array["time.daysinmonth"]
-
-#     if conversion_factor is None:
-#         conversion_factor = 1.0
-
-#     monthly_mean = (conversion_factor * data_array * months).groupby("time.month").sum(
-#         dim="time"
-#     ) / months.groupby("time.month").sum(dim="time")
-#     monthly_mean.name = data_array.name
-#     return monthly_mean
-
 def calculate_monthly_mean(
     data_array: xr.DataArray, conversion_factor: float = None
 ) -> xr.DataArray:
@@ -206,9 +189,14 @@ def calculate_monthly_mean(
     total_days = valid_days.groupby("time.month").sum(dim="time", skipna=True)
 
     monthly_mean = monthly_sum / total_days
+    
+    # mask out grid cells that were all-NaN across the time axis
+    all_nan_mask = data_array.isnull().all(dim="time")
+    monthly_mean = monthly_mean.where(~all_nan_mask)
+
     monthly_mean.name = data_array.name
     return monthly_mean
-
+    
 
 def preprocess(data_set: xr.Dataset, data_vars: list[str]) -> xr.Dataset:
     """Preprocesses and xarray Dataset by subsetting to specific variables - to be used on read-in

@@ -344,11 +344,11 @@ LORA_MRRO:
   out_var: mrro
   time_conversion_factor: 
     operation: multiply
-    operands: [24.0, 60.0, 60.0, 365.0]
+    operands: [24.0, 60.0, 60.0]
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  mm day-1
+  units:  mm yr-1
   longname: surface runoff
 
 CLASS_MRRO:
@@ -359,11 +359,11 @@ CLASS_MRRO:
   out_var: mrro
   time_conversion_factor: 
     operation: multiply
-    operands: [24.0, 60.0, 60.0, 365.0]
+    operands: [24.0, 60.0, 60.0]
   area_conversion_factor: null
   max_val: null
   min_val: null
-  units:  mm day-1
+  units:  mm yr-1
   longname: surface runoff
   
 FLUXCOM_SH:
@@ -684,9 +684,9 @@ GPCCv2018_PR:
   filename: pr.nc
   in_var: pr
   out_var: pr
-  time_conversion_factor: null
+  time_conversion_factor: 1.0
   area_conversion_factor: null
-  max_val: null
+  max_val: 500.0
   min_val: null
   units:  mm d-1
   longname: average monthly rate of precipitation

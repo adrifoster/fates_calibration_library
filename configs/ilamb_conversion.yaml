@@ -1,13 +1,3 @@
-ASA:
-  models: [CERESed4.2, GEWEX.SRB]
-  var: albedo
-  long_name: albedo
-  convert_units: null
-  conversion_factor: null 
-  global_units: 0-1
-  lat_units: 0-1
-  cmap: jet 
-  diverging_cmap: False 
 
 GPP:
   models: [FLUXCOM, WECANN, GBAF]
@@ -19,7 +9,29 @@ GPP:
   lat_units: PgC yr$^{-1}$
   cmap: YlGn
   diverging_cmap: False
-
+  
+LAI:
+  models: [AVHRR, AVH15C1, GIMMS_LAI4g, MODIS]
+  var: lai
+  long_name: leaf area index
+  convert_units: null
+  conversion_factor: null
+  global_units: m$^2$ m$^{-2}$
+  lat_units: m$^2$ m$^{-2}$
+  cmap: YlGn
+  diverging_cmap: False
+  
+BIOMASS:
+  models: [ESACCI, GEOCARBON, GLOBAL.CARBON, XuSaatchi2021]
+  var: biomass
+  long_name: forest biomass
+  convert_units: Tg
+  conversion_factor: 1.0E-08 
+  global_units: MgC ha$^{-1}$
+  lat_units: TgC
+  cmap: YlGn 
+  diverging_cmap: False 
+  
 NEE:
   models: [FLUXCOM, GBAF]
   var: nee
@@ -31,16 +43,37 @@ NEE:
   cmap: RdYlGn_r
   diverging_cmap: True 
 
-
-LAI:
-  models: [AVHRR, AVH15C1, GIMMS_LAI4g]
-  var: lai
-  long_name: leaf area index
+BURNTAREA:
+  models: [GFED4.1S]
+  var: burntarea
+  long_name: burned area
   convert_units: null
   conversion_factor: null
-  global_units: m$^2$ m$^{-2}$
-  lat_units: m$^2$ m$^{-2}$
-  cmap: YlGn
+  global_units: percent
+  lat_units: percent
+  cmap: Reds 
+  diverging_cmap: False 
+  
+ET:
+  models: [GLEAMv3.3a, MODIS, MOD16A2]
+  var: et
+  long_name: evapotranspiration
+  convert_units: null
+  conversion_factor: null
+  global_units: mm day$^{-1}$
+  lat_units: mm day$^{-1}$
+  cmap: YlGnBu
+  diverging_cmap: False
+  
+EF:
+  models: [FLUXCOM, CLASS, WECANN, GBAF]
+  var: ef
+  long_name: evaporative fraction
+  convert_units: null
+  conversion_factor: null
+  global_units: 0-1
+  lat_units: 0-1
+  cmap: BrBG
   diverging_cmap: False
 
 EFLX_LH_TOT:
@@ -52,6 +85,17 @@ EFLX_LH_TOT:
   global_units: W m$^{-2}$
   lat_units: W m$^{-2}$
   cmap: YlGnBu
+  diverging_cmap: False
+  
+MRRO:
+  models: [LORA, CLASS]
+  var: mrro
+  long_name: runoff
+  convert_units: null
+  conversion_factor: null
+  global_units: mm day$^{-1}$
+  lat_units: mm day$^{-1}$
+  cmap: Blues
   diverging_cmap: False
 
 FSH:
@@ -65,17 +109,6 @@ FSH:
   cmap: jet
   diverging_cmap: False
 
-EF:
-  models: [FLUXCOM, CLASS, WECANN, GBAF]
-  var: ef
-  long_name: evaporative fraction
-  convert_units: null
-  conversion_factor: null
-  global_units: 0-1
-  lat_units: 0-1
-  cmap: BrBG
-  diverging_cmap: False
-
 SW:
   models: [WangMao]
   var: sw
@@ -85,6 +118,17 @@ SW:
   global_units: kg m$^{-2}$
   lat_units: kg m$^{-2}$
   cmap: Blues
+  diverging_cmap: False 
+
+ASA:
+  models: [CERESed4.2, GEWEX.SRB]
+  var: albedo
+  long_name: albedo
+  convert_units: null
+  conversion_factor: null 
+  global_units: 0-1
+  lat_units: 0-1
+  cmap: jet 
   diverging_cmap: False 
 
 FSR:
@@ -132,7 +176,7 @@ RLNS:
   diverging_cmap: False
 
 RN:
-  models: [CERESed4.2, GEWEX.SRB]
+  models: [CERESed4.2, GEWEX.SRB, CLASS]
   var: rn
   long_name: net radiation
   convert_units: null
@@ -140,28 +184,6 @@ RN:
   global_units: W m$^{-2}$
   lat_units: W m$^{-2}$
   cmap: jet
-  diverging_cmap: False 
-
-BIOMASS:
-  models: [ESACCI, GEOCARBON, XuSaatchi2021]
-  var: biomass
-  long_name: forest biomass
-  convert_units: Tg
-  conversion_factor: 1.0E-08 
-  global_units: MgC ha$^{-1}$
-  lat_units: TgC
-  cmap: YlGn 
-  diverging_cmap: False 
-
-BURNTAREA:
-  models: [GFED4.1S]
-  var: burntarea
-  long_name: burned area
-  convert_units: null
-  conversion_factor: null
-  global_units: percent
-  lat_units: percent
-  cmap: Reds 
   diverging_cmap: False 
 
 GR:
@@ -175,20 +197,91 @@ GR:
   cmap: Oranges
   diverging_cmap: False
 
+TSA:
+  models: [CRU4.02]
+  var: tas
+  long_name: air temperature
+  convert_units: null
+  conversion_factor: null
+  global_units: K
+  lat_units: K
+  cmap: jet
+  diverging_cmap: False
 
-MRRO:
-  models: [LORA, CLASS]
-  var: mrro
-  long_name: runoff
+TMIN:
+  models: [CRU4.02]
+  var: tasmin
+  long_name: minimum air temperature
+  convert_units: null
+  conversion_factor: null
+  global_units: K
+  lat_units: K
+  cmap: jet
+  diverging_cmap: False
+  
+TMAX:
+  models: [CRU4.02]
+  var: tasmax
+  long_name: maximum air temperature
+  convert_units: null
+  conversion_factor: null
+  global_units: K
+  lat_units: K
+  cmap: jet
+  diverging_cmap: False
+  
+DTR:
+  models: [CRU4.02]
+  var: dtr
+  long_name: diurnal air temperature range
+  convert_units: null
+  conversion_factor: null
+  global_units: K
+  lat_units: K
+  cmap: jet
+  diverging_cmap: False
+
+PR:
+  models: [CMAPv1904, GPCCv2018, GPCPv2.3, CLASS]
+  var: pr
+  long_name: precipitation
   convert_units: null
   conversion_factor: null
   global_units: mm day$^{-1}$
   lat_units: mm day$^{-1}$
-  cmap: Blues
+  cmap: jet
   diverging_cmap: False
 
+RH:
+  models: [ERA5, CRU4.02]
+  var: rhums
+  long_name: relative humidity
+  convert_units: null
+  conversion_factor: null
+  global_units: percent
+  lat_units: percent
+  cmap: BrBG
+  diverging_cmap: False
 
+RSDS:
+  models: [CERESed4.2, GEWEX.SRB]
+  var: rsds
+  long_name: shortwave flux down
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False
 
-
-
+FLDS:
+  models: [CERESed4.2, GEWEX.SRB]
+  var: rlds
+  long_name: longwave flux down
+  convert_units: null
+  conversion_factor: null
+  global_units: W m$^{-2}$
+  lat_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False
 

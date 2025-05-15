@@ -1,4 +1,6 @@
 """Helper methods"""
+import operator
+from functools import reduce
 
 import yaml
 
@@ -30,7 +32,11 @@ def evaluate_conversion_factor(factor) -> float:
                 result *= num
             return result
         elif op == "add":
-            return sum(operands)
+            return sum(operands)        
+        elif op == "divide":
+            if len(operands) < 2:
+                raise ValueError("Divide operation requires at least two operands.")
+            return reduce(operator.truediv, operands)
     return factor
 
 

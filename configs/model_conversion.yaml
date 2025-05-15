@@ -105,6 +105,15 @@ RN:
   cmap: jet
   diverging_cmap: False
   long_name: Net Radiation
+  
+FSDS:
+  time_conversion_factor: null
+  area_conversion_factor: null
+  annual_units: W m$^{-2}$
+  global_units: W m$^{-2}$
+  cmap: jet
+  diverging_cmap: False
+  long_name: Downward Shortwave Radiation Flux
 
 TV:
   time_conversion_factor: null
