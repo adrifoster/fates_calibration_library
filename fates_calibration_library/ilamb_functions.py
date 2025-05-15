@@ -13,10 +13,11 @@ from fates_calibration_library.analysis_functions import (
     calculate_monthly_mean,
     calculate_annual_mean,
     calculate_month_of_max,
-    area_mean
+    area_mean,
 )
 from fates_calibration_library.utils import evaluate_conversion_factor
 from fates_calibration_library.surface_data_functions import extract_biome
+
 
 def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
     """Regrids all ILAMB dataset
@@ -29,10 +30,10 @@ def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.D
     """
     # create output directory if it doesn't exist
     os.makedirs(config_dict["regrid_dir"], exist_ok=True)
-    
+
     # regrid each dataset
     for dataset, attributes in ilamb_dict.items():
-        if attributes['in_var'] in {'ef', 'albedo'}:
+        if attributes["in_var"] in {"ef", "albedo"}:
             continue
         out_file = os.path.join(
             config_dict["regrid_dir"],
@@ -46,7 +47,7 @@ def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.D
 
         ds_out = regrid_dataset(config_dict, ilamb_dict, attributes, target_grid)
         ds_out.to_netcdf(out_file, mode="w")
-    
+
 
 def regrid_dataset(config_dict, ilamb_dict, attributes, target_grid):
     """Handles regridding for a single dataset
@@ -58,23 +59,23 @@ def regrid_dataset(config_dict, ilamb_dict, attributes, target_grid):
         attributes (dict): dictionary with attributes about this ILAMB dataset
         target_grid (xr.DataArray): target grid for regridding
     """
-    
+
     # read or compute ILAMB data
     ilamb_dat, original_file = read_ilamb_data(config_dict, attributes)
-    
+
     # drop lat_bounds and lon_bounds if they exist in the dataset
-    bounds_vars = ['lat_bounds', 'lon_bounds', 'lat_bnds', 'lon_bnds']
+    bounds_vars = ["lat_bounds", "lon_bounds", "lat_bnds", "lon_bnds"]
     to_drop = [var for var in bounds_vars if var in ilamb_dat.variables]
-    ilamb_dat = ilamb_dat.drop_vars(to_drop, errors='ignore')
-    
-    
+    ilamb_dat = ilamb_dat.drop_vars(to_drop, errors="ignore")
+
     ds = regrid_ilamb_ds(ilamb_dat, target_grid, attributes["in_var"])
     ds.attrs["Original"] = original_file
     ds.attrs["Date"] = str(date.today())
     ds.attrs["Author"] = config_dict["user"]
 
     return ds
-    
+
+
 def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict):
 
     # create output directory if it doesn't exist
@@ -94,10 +95,10 @@ def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict):
 
         ds_out = process_dataset(config_dict, ilamb_dict, attributes)
         ds_out.to_netcdf(out_file, mode="w")
-        
+
 
 def get_annual_ef(le, le_dict, sh, sh_dict, metadata, out_var):
-    
+
     # calculate annual LE and SH
     annual_le = get_annual_ds(
         le,
@@ -106,7 +107,7 @@ def get_annual_ef(le, le_dict, sh, sh_dict, metadata, out_var):
         evaluate_conversion_factor(le_dict["time_conversion_factor"]),
         metadata,
     )
-    
+
     annual_sh = get_annual_ds(
         sh,
         sh_dict["in_var"],
@@ -114,16 +115,18 @@ def get_annual_ef(le, le_dict, sh, sh_dict, metadata, out_var):
         evaluate_conversion_factor(sh_dict["time_conversion_factor"]),
         metadata,
     )
-        
-    annual_ds = evapfrac(annual_sh[sh_dict['in_var']], annual_le[le_dict['in_var']], 0.0).to_dataset(name=out_var)
-    annual_ds[out_var].attrs['units'] = ''
-    annual_ds[out_var].attrs['long_name'] = 'evaporative fraction'
-    
+
+    annual_ds = evapfrac(
+        annual_sh[sh_dict["in_var"]], annual_le[le_dict["in_var"]], 0.0
+    ).to_dataset(name=out_var)
+    annual_ds[out_var].attrs["units"] = ""
+    annual_ds[out_var].attrs["long_name"] = "evaporative fraction"
+
     return annual_ds
 
 
 def get_annual_albedo(rsds, rsds_dict, rsus, rsus_dict, metadata, out_var):
-    
+
     # calculate annual rsds and rsus
     annual_rsds = get_annual_ds(
         rsds,
@@ -132,7 +135,7 @@ def get_annual_albedo(rsds, rsds_dict, rsus, rsus_dict, metadata, out_var):
         evaluate_conversion_factor(rsds_dict["time_conversion_factor"]),
         metadata,
     )
-    
+
     annual_rsus = get_annual_ds(
         rsus,
         rsus_dict["in_var"],
@@ -140,11 +143,13 @@ def get_annual_albedo(rsds, rsds_dict, rsus, rsus_dict, metadata, out_var):
         evaluate_conversion_factor(rsus_dict["time_conversion_factor"]),
         metadata,
     )
-    
-    annual_ds = albedo(annual_rsds[rsds_dict['in_var']], annual_rsus[rsus_dict['in_var']], 0.0).to_dataset(name=out_var)
-    annual_ds[out_var].attrs['units'] = ''
-    annual_ds[out_var].attrs['long_name'] = 'albedo'
-    
+
+    annual_ds = albedo(
+        annual_rsds[rsds_dict["in_var"]], annual_rsus[rsus_dict["in_var"]], 0.0
+    ).to_dataset(name=out_var)
+    annual_ds[out_var].attrs["units"] = ""
+    annual_ds[out_var].attrs["long_name"] = "albedo"
+
     return annual_ds
 
 
@@ -152,7 +157,6 @@ def process_dataset(
     config_dict: dict,
     ilamb_dict: dict,
     attributes: dict,
-    
 ):
     """Handles reading, conversion, and regridding for a single dataset
 
@@ -164,18 +168,19 @@ def process_dataset(
     """
 
     # read in regions
-    region = xr.open_dataset(os.path.join(config_dict['top_dir'], 
-                                          'regions/GlobalLandNoAnt.nc'))
+    region = xr.open_dataset(
+        os.path.join(config_dict["top_dir"], "regions/GlobalLandNoAnt.nc")
+    )
     # swap out 0.0 (land) for 1.0
-    region['ids'] = xr.where(region.ids == 0.0, 1.0, 0.0)
-    
-    if attributes['in_var'] == 'ef':
-        
+    region["ids"] = xr.where(region.ids == 0.0, 1.0, 0.0)
+
+    if attributes["in_var"] == "ef":
+
         le_dict, sh_dict = (
             ilamb_dict[f"{attributes['model']}_LE"],
             ilamb_dict[f"{attributes['model']}_SH"],
         )
-        
+
         # prepare metadata
         original_file = build_file_paths(
             config_dict["top_dir"],
@@ -183,32 +188,41 @@ def process_dataset(
             attributes["model"],
             [le_dict["filename"], sh_dict["filename"]],
         )
-        
+
         metadata = {
             "units": attributes["units"],
             "longname": attributes["longname"],
             "original_file": original_file,
             "user": config_dict["user"],
         }
-        
-        le, sh = get_ef_data(config_dict['regrid_dir'], le_dict, sh_dict,
-                             config_dict['regrid_tag'])
-        annual_ds = get_annual_ef(le, le_dict, sh, sh_dict, metadata, attributes['out_var'])
-        
-        le_raw, sh_raw = get_ef_data(config_dict['top_dir'], le_dict, sh_dict)
-        annual_original = get_annual_ef(le_raw, le_dict, sh_raw, sh_dict, metadata, attributes['out_var'])
-        
+
+        le, sh = get_ef_data(
+            config_dict["regrid_dir"], le_dict, sh_dict, config_dict["regrid_tag"]
+        )
+        annual_ds = get_annual_ef(
+            le, le_dict, sh, sh_dict, metadata, attributes["out_var"]
+        )
+
+        le_raw, sh_raw = get_ef_data(config_dict["top_dir"], le_dict, sh_dict)
+        annual_original = get_annual_ef(
+            le_raw, le_dict, sh_raw, sh_dict, metadata, attributes["out_var"]
+        )
+
         # calculate sub-annual for climatology
-        ilamb_dat = evapfrac(sh_raw[sh_dict['in_var']], le_raw[le_dict['in_var']], 20.0).to_dataset(name=attributes['out_var'])
-        regridded_dat = evapfrac(sh[sh_dict['in_var']], le[le_dict['in_var']], 20.0).to_dataset(name=attributes['out_var'])
-        
-    elif attributes['in_var'] == 'albedo':
-        
+        ilamb_dat = evapfrac(
+            sh_raw[sh_dict["in_var"]], le_raw[le_dict["in_var"]], 20.0
+        ).to_dataset(name=attributes["out_var"])
+        regridded_dat = evapfrac(
+            sh[sh_dict["in_var"]], le[le_dict["in_var"]], 20.0
+        ).to_dataset(name=attributes["out_var"])
+
+    elif attributes["in_var"] == "albedo":
+
         rsds_dict, rsus_dict = (
             ilamb_dict[f"{attributes['model']}_RSDS"],
             ilamb_dict[f"{attributes['model']}_FSR"],
         )
-        
+
         # prepare metadata
         original_file = build_file_paths(
             config_dict["top_dir"],
@@ -216,35 +230,44 @@ def process_dataset(
             attributes["model"],
             [rsds_dict["filename"], rsus_dict["filename"]],
         )
-        
+
         metadata = {
             "units": attributes["units"],
             "longname": attributes["longname"],
             "original_file": original_file,
             "user": config_dict["user"],
         }
-        
-        rsds, rsus = get_albedo_data(config_dict['regrid_dir'], rsds_dict, rsus_dict,
-                             config_dict['regrid_tag'])
-        annual_ds = get_annual_albedo(rsds, rsds_dict, rsus, rsus_dict, metadata, 
-                                      attributes['out_var'])
-    
-        rsds_raw, rsus_raw = get_albedo_data(config_dict['top_dir'], rsds_dict, rsus_dict)
-        annual_original = get_annual_albedo(rsds_raw, rsds_dict, rsus_raw, rsus_dict, metadata, 
-                                      attributes['out_var'])
-        
-        ilamb_dat = albedo(rsds_raw[rsds_dict['in_var']], rsus_raw[rsus_dict['in_var']], 10.0).to_dataset(name=attributes['out_var'])
-        regridded_dat = albedo(rsds[rsds_dict['in_var']], rsus[rsus_dict['in_var']], 20.0).to_dataset(name=attributes['out_var'])
-        
+
+        rsds, rsus = get_albedo_data(
+            config_dict["regrid_dir"], rsds_dict, rsus_dict, config_dict["regrid_tag"]
+        )
+        annual_ds = get_annual_albedo(
+            rsds, rsds_dict, rsus, rsus_dict, metadata, attributes["out_var"]
+        )
+
+        rsds_raw, rsus_raw = get_albedo_data(
+            config_dict["top_dir"], rsds_dict, rsus_dict
+        )
+        annual_original = get_annual_albedo(
+            rsds_raw, rsds_dict, rsus_raw, rsus_dict, metadata, attributes["out_var"]
+        )
+
+        ilamb_dat = albedo(
+            rsds_raw[rsds_dict["in_var"]], rsus_raw[rsus_dict["in_var"]], 10.0
+        ).to_dataset(name=attributes["out_var"])
+        regridded_dat = albedo(
+            rsds[rsds_dict["in_var"]], rsus[rsus_dict["in_var"]], 20.0
+        ).to_dataset(name=attributes["out_var"])
+
     else:
-        
+
         # read in regridded dataset
         file_name = os.path.join(
             config_dict["regrid_dir"],
             f"{attributes['model']}_{attributes['out_var'].upper()}_{config_dict['regrid_tag']}.nc",
         )
         regridded_dat = xr.open_dataset(file_name)
-        
+
         # prepare metadata
         metadata = {
             "units": attributes["units"],
@@ -261,7 +284,7 @@ def process_dataset(
             evaluate_conversion_factor(attributes["time_conversion_factor"]),
             metadata,
         )
-        
+
         # read in raw data
         ilamb_dat, original_file = read_ilamb_data(config_dict, attributes)
         annual_original = get_annual_ds(
@@ -270,44 +293,46 @@ def process_dataset(
             attributes["out_var"],
             evaluate_conversion_factor(attributes["time_conversion_factor"]),
             metadata,
-        ) 
+        )
 
     # calculate cell areas and land area
     cell_area = get_ilamb_land_area(ilamb_dat)
-    region_regridder = xe.Regridder(region['ids'], ilamb_dat, 'bilinear')
-    landfrac = region_regridder(region['ids'])
-    land_area = landfrac*cell_area 
-    
-    global_mean = area_mean(annual_original[attributes["out_var"]].mean(dim='year'), 
-                        evaluate_conversion_factor(attributes["area_conversion_factor"]), 
-                        land_area).to_dataset(name=f"{attributes['out_var']}_global")
-    
+    region_regridder = xe.Regridder(region["ids"], ilamb_dat, "bilinear")
+    landfrac = region_regridder(region["ids"])
+    land_area = landfrac * cell_area
+
+    global_mean = area_mean(
+        annual_original[attributes["out_var"]].mean(dim="year"),
+        evaluate_conversion_factor(attributes["area_conversion_factor"]),
+        land_area,
+    ).to_dataset(name=f"{attributes['out_var']}_global")
+
     time_len = len(ilamb_dat.time)
-    num_years = len(np.unique(ilamb_dat['time.year']))
-    
+    num_years = len(np.unique(ilamb_dat["time.year"]))
+
     if time_len > 1 and time_len > num_years:
-        
+
         # monthly mean
         monthly_mean = get_monthly_ds(
             ilamb_dat[attributes["in_var"]],
             f"{attributes['out_var']}_monthly",
             evaluate_conversion_factor(attributes["time_conversion_factor"]),
-            metadata
+            metadata,
         )
-        monthly_mean['land_area'] = land_area
-        
+        monthly_mean["land_area"] = land_area
+
         regridded_monthly_mean = get_monthly_ds(
             regridded_dat[attributes["in_var"]],
             f"{attributes['out_var']}_monthly",
             evaluate_conversion_factor(attributes["time_conversion_factor"]),
-            metadata
+            metadata,
         )
 
         # calculate month of maximum value
         month_of_max = calculate_month_of_max(
             regridded_monthly_mean[f"{attributes['out_var']}_monthly"]
         ).to_dataset(name=f"{attributes['out_var']}_month_of_max")
-            
+
         # get climatology
         climatology_ds = get_ilamb_climatology(
             monthly_mean,
@@ -319,22 +344,24 @@ def process_dataset(
         return xr.merge([annual_ds, global_mean, month_of_max, climatology_ds])
     else:
         return xr.merge([annual_ds, global_mean])
-    
+
+
 def get_ilamb_land_area(ds):
-    
+
     lats = ds.lat.values
     lons = ds.lon.values
 
     areas = cell_areas(lats, lons)
     area_da = xr.DataArray(
-        areas*1e-6,
-        dims=['lat', 'lon'],
-        coords={'lat': lats, 'lon': lons},
-        name='cell_area',
-        attrs={'units': 'km2', 'description': 'grid cell area'}
+        areas * 1e-6,
+        dims=["lat", "lon"],
+        coords={"lat": lats, "lon": lons},
+        name="cell_area",
+        attrs={"units": "km2", "description": "grid cell area"},
     )
 
     return area_da
+
 
 def get_ilamb_climatology(
     monthly_mean: xr.DataArray, out_var: str, area_cf
@@ -351,7 +378,7 @@ def get_ilamb_climatology(
     """
 
     # sum up to get areas where there is no data
-    #sum_monthly = monthly_mean[f"{out_var}_monthly"].sum(dim="month")
+    # sum_monthly = monthly_mean[f"{out_var}_monthly"].sum(dim="month")
     all_nan = monthly_mean[f"{out_var}_monthly"].isnull().all(dim="month")
 
     land_area = monthly_mean.land_area
@@ -423,7 +450,7 @@ def read_ilamb_data(
         "max_val": attributes.get("max_val", None),
         "min_val": attributes.get("min_val", None),
     }
-    
+
     # create the file_info dictionary
     file_info = {
         "top_dir": config["top_dir"],
@@ -445,8 +472,10 @@ def read_ilamb_data(
 
     return ilamb_dat, original_file
 
-def get_monthly_ds(ds: xr.Dataset, out_var: str, conversion_factor: float,
-                   metadata: Dict[str, str]) -> xr.Dataset:
+
+def get_monthly_ds(
+    ds: xr.Dataset, out_var: str, conversion_factor: float, metadata: Dict[str, str]
+) -> xr.Dataset:
     """Calculates a monthly dataset from an input dataset for variable in_var
 
     Args:
@@ -463,12 +492,13 @@ def get_monthly_ds(ds: xr.Dataset, out_var: str, conversion_factor: float,
     Returns:
         xr.Dataset: output dataset
     """
-    
+
     monthly_ds = calculate_monthly_mean(ds, conversion_factor).to_dataset(name=out_var)
     monthly_ds[out_var].attrs["units"] = metadata["units"]
     monthly_ds[out_var].attrs["long_name"] = metadata["longname"]
-    
-    return monthly_ds    
+
+    return monthly_ds
+
 
 def get_ilamb_ds(
     file_info: Dict[str, str], in_var: str, filter_options: Dict[str, Optional[float]]
@@ -535,7 +565,7 @@ def get_ef_data(
     top_dir: str,
     le_dict: dict,
     sh_dict: dict,
-    regrid_tag: str=None,
+    regrid_tag: str = None,
 ) -> xr.Dataset:
     """Calculate evaporative fraction for a given ILAMB dataset (LE and SH)
 
@@ -566,7 +596,7 @@ def get_ef_data(
         )
     le = xr.open_dataset(le_path)
     sh = xr.open_dataset(sh_path)
-    
+
     le_filter = {
         "max_val": le_dict.get("max_val", None),
         "min_val": le_dict.get("min_val", None),
@@ -579,7 +609,7 @@ def get_ef_data(
     # filter by date and min/max
     le = filter_dataset(le, le_dict["in_var"], le_filter)
     sh = filter_dataset(sh, sh_dict["in_var"], sh_filter)
-    
+
     return le, sh
 
 
@@ -607,7 +637,7 @@ def get_albedo_data(
     top_dir: str,
     rsds_dict: dict,
     rsus_dict: dict,
-    regrid_tag: str=None,
+    regrid_tag: str = None,
 ) -> xr.Dataset:
     """Calculate albedo for a given ILAMB dataset (RSDS and RSUS)
 
@@ -623,10 +653,12 @@ def get_albedo_data(
     # read in datasets
     if regrid_tag is not None:
         rsds_path = os.path.join(
-            top_dir, f"{rsds_dict['model']}_{rsds_dict['out_var'].upper()}_{regrid_tag}.nc"
+            top_dir,
+            f"{rsds_dict['model']}_{rsds_dict['out_var'].upper()}_{regrid_tag}.nc",
         )
         rsus_path = os.path.join(
-            top_dir, f"{rsus_dict['model']}_{rsus_dict['out_var'].upper()}_{regrid_tag}.nc"
+            top_dir,
+            f"{rsus_dict['model']}_{rsus_dict['out_var'].upper()}_{regrid_tag}.nc",
         )
     else:
         rsds_path = os.path.join(
@@ -635,11 +667,10 @@ def get_albedo_data(
         rsus_path = os.path.join(
             top_dir, rsus_dict["sub_dir"], rsus_dict["model"], rsus_dict["filename"]
         )
-        
 
     rsds = xr.open_dataset(rsds_path)
     rsus = xr.open_dataset(rsus_path)
-    
+
     rsds_filter = {
         "max_val": rsds_dict.get("max_val", None),
         "min_val": rsds_dict.get("min_val", None),
@@ -740,12 +771,14 @@ def get_annual_ds(
 
     # calculate annual values
     if len(ds.time) > 1:
-       annual = calculate_annual_mean(ds[in_var], conversion_factor)
-       annual_ds = annual.to_dataset(name=out_var)
+        annual = calculate_annual_mean(ds[in_var], conversion_factor)
+        annual_ds = annual.to_dataset(name=out_var)
     else:
-        year = ds['time.year'].values[0]
-        annual_ds = ds[in_var].isel(time=0).to_dataset(name=out_var).drop_vars('time')
-        annual_ds = annual_ds.expand_dims(year=[year]).assign_coords(year=('year', [year]))
+        year = ds["time.year"].values[0]
+        annual_ds = ds[in_var].isel(time=0).to_dataset(name=out_var).drop_vars("time")
+        annual_ds = annual_ds.expand_dims(year=[year]).assign_coords(
+            year=("year", [year])
+        )
 
     annual_ds[out_var].attrs["units"] = metadata["units"]
     annual_ds[out_var].attrs["long_name"] = metadata["longname"]
@@ -780,10 +813,10 @@ def regrid_ilamb_ds(
 
     # create mask
     ds[var] = ds[var].fillna(0)
-    
+
     regridder = xe.Regridder(ds[var], target_grid, method)
     ds_regrid = regridder(ds[var]).to_dataset(name=var)
-    ds_regrid[var] = ds_regrid[var]*target_grid.landmask
+    ds_regrid[var] = ds_regrid[var] * target_grid.landmask
     ds_regrid[var].attrs = ds[var].attrs
     ds_regrid.attrs = ds.attrs
 
@@ -855,10 +888,10 @@ def compile_variable(var: str, models: list[str], out_dir: str) -> xr.Dataset:
         ds = xr.open_dataset(file_name)
         processed_ds = (
             get_average_and_iav(ds, var)
-            if 'year' in ds.dims
+            if "year" in ds.dims
             else ds[var].to_dataset(name=var)
         )
-        if 'month' in ds.dims:
+        if "month" in ds.dims:
             processed_ds[f"{var}_cycle"] = ds[f"{var}_cycle"]
             processed_ds[f"{var}_month_of_max"] = ds[f"{var}_month_of_max"]
             processed_ds[f"{var}_anomaly"] = ds[f"{var}_anomaly"]
