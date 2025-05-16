@@ -1,6 +1,7 @@
 """Methods for processing and analyzing ILAMB data"""
 
 import os
+import logging
 from datetime import date
 from typing import Dict, Optional
 from functools import reduce
@@ -15,63 +16,117 @@ from fates_calibration_library.analysis_functions import (
     calculate_month_of_max,
     area_mean,
 )
-from fates_calibration_library.utils import evaluate_conversion_factor
+from fates_calibration_library.utils import (
+    evaluate_conversion_factor,
+    should_skip_file,
+    validate_dict_keys,
+)
 from fates_calibration_library.surface_data_functions import extract_biome
+
+logger = logging.getLogger(__name__)
+
+BOUNDS_VARS = ["lat_bounds", "lon_bounds", "lat_bnds", "lon_bnds"]
 
 
 def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.Dataset):
-    """Regrids all ILAMB dataset
+    """Regrids all ILAMB datasets
 
     Args:
-        config_dict (dict): Configuration containing top_dir, clobber, out_dir
+        config_dict (dict): Configuration containing regrid_dir, out_dir, etc.
         ilamb_dict (dict): Dictionary with ILAMB dataset information.
         target_grid (xr.Dataset): Target grid for regridding.
-        clobber (bool): whether to overwrite files.
     """
+
+    REQUIRED_CONFIG_KEYS = {"regrid_dir", "clobber", "regrid_tag"}
+    REQUIRED_ILAMB_KEYS = {"in_var", "out_var", "model"}
+
+    # make sure all our keys are here
+    validate_dict_keys(config_dict, REQUIRED_CONFIG_KEYS, "config_dict")
+
     # create output directory if it doesn't exist
     os.makedirs(config_dict["regrid_dir"], exist_ok=True)
 
     # regrid each dataset
     for dataset, attributes in ilamb_dict.items():
+
+        # make sure all our keys are here
+        validate_dict_keys(attributes, REQUIRED_ILAMB_KEYS, f"ilamb_dict['{dataset}']")
+
+        # we skip regridding ef and albedo because these will be calculated from mean values
         if attributes["in_var"] in {"ef", "albedo"}:
             continue
-        out_file = os.path.join(
-            config_dict["regrid_dir"],
-            f"{attributes['model']}_{attributes['out_var'].upper()}_{config_dict['regrid_tag']}.nc",
-        )
+        out_file = construct_output_filename(config_dict, attributes, True)
 
         # skip if file exists and clobber is False
-        if os.path.isfile(out_file) and not config_dict["clobber"]:
-            print(f"File {out_file} for {dataset} exists, skipping")
+        if should_skip_file(out_file, config_dict["clobber"]):
+            logger.info(f"File {out_file} for {dataset} exists, skipping")
             continue
 
         ds_out = regrid_dataset(config_dict, ilamb_dict, attributes, target_grid)
         ds_out.to_netcdf(out_file, mode="w")
 
 
-def regrid_dataset(config_dict, ilamb_dict, attributes, target_grid):
+def construct_output_filename(config: Dict, attributes: Dict, regridded: bool) -> str:
+    """Creates an output file name from set of config information
+
+    Args:
+        config (dict): Configuration containing regrid_dir, out_dir
+        attributes (dict): Dictionary with ILAMB dataset information.
+        regridded (bool): whether or not this is the regridded raw file
+
+    Returns:
+        str: output file name
+    """
+    if regridded:
+        return os.path.join(
+            config["regrid_dir"],
+            f"{attributes['model']}_{attributes['out_var'].upper()}_{config['regrid_tag']}.nc",
+        )
+    else:
+        return os.path.join(
+            config["out_dir"],
+            f"{attributes['model']}_{attributes['out_var'].upper()}.nc",
+        )
+
+
+def add_metadata(ds: xr.Dataset, original_file: str, user: str) -> xr.Dataset:
+    """Adds metadata to a dataset
+
+    Args:
+        ds (xr.Dataset): input dataset
+        original_file (str): original file location
+        user (str): user
+
+    Returns:
+        xr.Dataset: output dataset
+    """
+    ds.attrs["Original"] = original_file
+    ds.attrs["Date"] = str(date.today())
+    ds.attrs["Author"] = user
+    return ds
+
+
+def regrid_dataset(
+    config_dict: Dict, attributes: Dict, target_grid: xr.DataArray
+) -> xr.Dataset:
     """Handles regridding for a single dataset
 
     Args:
         config (dict): Configuration containing top_dir, clobber, out_dir
-        ilamb_dict (dict): Dictionary with ILAMB dataset information.
-        dataset (str): ILAMB dataset name
         attributes (dict): dictionary with attributes about this ILAMB dataset
         target_grid (xr.DataArray): target grid for regridding
     """
 
-    # read or compute ILAMB data
-    ilamb_dat, original_file = read_ilamb_data(config_dict, attributes)
+    # read or ILAMB data
+    ilamb_dat, original_file = read_ilamb_data(config_dict["top_dir"], attributes)
 
-    # drop lat_bounds and lon_bounds if they exist in the dataset
-    bounds_vars = ["lat_bounds", "lon_bounds", "lat_bnds", "lon_bnds"]
-    to_drop = [var for var in bounds_vars if var in ilamb_dat.variables]
+    # drop bounds if they exist in the dataset
+    to_drop = [var for var in BOUNDS_VARS if var in ilamb_dat.variables]
     ilamb_dat = ilamb_dat.drop_vars(to_drop, errors="ignore")
 
-    ds = regrid_ilamb_ds(ilamb_dat, target_grid, attributes["in_var"])
-    ds.attrs["Original"] = original_file
-    ds.attrs["Date"] = str(date.today())
-    ds.attrs["Author"] = config_dict["user"]
+    # regrid the dataset
+    ds = regrid_data(ilamb_dat, target_grid, attributes["in_var"])
+    ds = add_metadata(ds, original_file, config_dict["user"])
 
     return ds
 
@@ -83,14 +138,11 @@ def get_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict):
 
     # process each dataset
     for dataset, attributes in ilamb_dict.items():
-        out_file = os.path.join(
-            config_dict["out_dir"],
-            f"{attributes['model']}_{attributes['out_var'].upper()}.nc",
-        )
+        out_file = construct_output_filename(config_dict, attributes, False)
 
         # skip if file exists and clobber is False
-        if os.path.isfile(out_file) and not config_dict["clobber"]:
-            print(f"File {out_file} for {dataset} exists, skipping")
+        if should_skip_file(out_file, config_dict["clobber"]):
+            logger.info(f"File {out_file} for {dataset} exists, skipping")
             continue
 
         ds_out = process_dataset(config_dict, ilamb_dict, attributes)
@@ -286,7 +338,7 @@ def process_dataset(
         )
 
         # read in raw data
-        ilamb_dat, original_file = read_ilamb_data(config_dict, attributes)
+        ilamb_dat, original_file = read_ilamb_data(config_dict["top_dir"], attributes)
         annual_original = get_annual_ds(
             ilamb_dat,
             attributes["in_var"],
@@ -302,7 +354,7 @@ def process_dataset(
     land_area = landfrac * cell_area
 
     global_mean = area_mean(
-        annual_original[attributes["out_var"]].mean(dim="year"),
+        annual_original[attributes["out_var"]],
         evaluate_conversion_factor(attributes["area_conversion_factor"]),
         land_area,
     ).to_dataset(name=f"{attributes['out_var']}_global")
@@ -312,15 +364,13 @@ def process_dataset(
 
     if time_len > 1 and time_len > num_years:
 
-        # monthly mean
         monthly_mean = get_monthly_ds(
             ilamb_dat[attributes["in_var"]],
             f"{attributes['out_var']}_monthly",
             evaluate_conversion_factor(attributes["time_conversion_factor"]),
             metadata,
         )
-        monthly_mean["land_area"] = land_area
-
+        
         regridded_monthly_mean = get_monthly_ds(
             regridded_dat[attributes["in_var"]],
             f"{attributes['out_var']}_monthly",
@@ -332,19 +382,15 @@ def process_dataset(
         month_of_max = calculate_month_of_max(
             regridded_monthly_mean[f"{attributes['out_var']}_monthly"]
         ).to_dataset(name=f"{attributes['out_var']}_month_of_max")
-
-        # get climatology
-        climatology_ds = get_ilamb_climatology(
-            monthly_mean,
-            attributes["out_var"],
-            evaluate_conversion_factor(attributes["area_conversion_factor"]),
-        )
+        
+        climatology_ds = get_ilamb_climatology(monthly_mean, 
+            land_area, f"{attributes['out_var']}_monthly", 
+            evaluate_conversion_factor(attributes["area_conversion_factor"]))
 
         # return all files combined
         return xr.merge([annual_ds, global_mean, month_of_max, climatology_ds])
     else:
         return xr.merge([annual_ds, global_mean])
-
 
 def get_ilamb_land_area(ds):
 
@@ -364,12 +410,13 @@ def get_ilamb_land_area(ds):
 
 
 def get_ilamb_climatology(
-    monthly_mean: xr.DataArray, out_var: str, area_cf
+    data_array: xr.DataArray, land_area: xr.DataArray, out_var: str, area_cf
 ) -> xr.Dataset:
     """Returns dataset of climatology of the monthly input data
 
     Args:
         monthly_mean (xr.DataArray): monthly mean values
+        land_area (xr.DataArray): land area [km2]
         out_var (str): name of output variable
         area_cf (float): area conversion factor
 
@@ -379,16 +426,15 @@ def get_ilamb_climatology(
 
     # sum up to get areas where there is no data
     # sum_monthly = monthly_mean[f"{out_var}_monthly"].sum(dim="month")
-    all_nan = monthly_mean[f"{out_var}_monthly"].isnull().all(dim="month")
-
-    land_area = monthly_mean.land_area
+    all_nan = data_array[f"{out_var}_monthly"].isnull().all(dim="month")
+    
     land_area = xr.where(~all_nan, land_area, 0.0)
 
     if area_cf is None:
         area_cf = 1 / land_area.sum(dim=["lat", "lon"]).values
 
     # weight by landarea
-    area_weighted = land_area * monthly_mean[f"{out_var}_monthly"]
+    area_weighted = land_area * data_array[f"{out_var}_monthly"]
 
     # calculate area mean
     climatology = area_cf * area_weighted.sum(dim=["lat", "lon"]).to_dataset(
@@ -427,50 +473,62 @@ def build_file_paths(top_dir, sub_dirs, model, filenames):
 
 
 def read_ilamb_data(
-    config: dict,
+    top_dir: str,
     attributes: dict,
 ) -> tuple[xr.Dataset, str]:
-    """Handles reading or computing different types of ILAMB datasets
+    """Reads in a raw dataset from the ILAMB data repository and potentially filters
+    on min/max value
 
     Args:
-        config (dict): Configuration containing top_dir, clobber, out_dir,
-            start_date, end_date.
-        ilamb_dict (dict): Dictionary with ILAMB dataset information.
-        attributes (dict): dictionary with attributes about this ILAMB dataset
-
+        top_dir (str): top directory with raw ILAMB data
+        attributes (dict): dictionary with attributes about this ILAMB dataset such as
+                'sub_dir', 'model', 'filename', 'in_var', and optional 'max_val'/'min_val'.
 
     Returns:
-        tuple[xr.Dataset, str]: output dataset and string for original file
+        tuple[xr.Dataset, str]: A tuple containing:
+            - the ILAMB dataset as an xarray.Dataset
+            - the constructed path string of the original file
+    Raises:
+        KeyError: if the required keys are missing in attributes
+        IOError: if the file reading fails
+        ValueError: if the input variable isn't found on dataset
     """
 
-    # create the filter_options dictionary
-    filter_options = {
-        "tstart": None,
-        "tstop": None,
-        "max_val": attributes.get("max_val", None),
-        "min_val": attributes.get("min_val", None),
-    }
-
-    # create the file_info dictionary
-    file_info = {
-        "top_dir": config["top_dir"],
-        "sub_dir": attributes["sub_dir"],
-        "model": attributes["model"],
-        "filename": attributes["filename"],
-    }
-
-    # read dataset
-    ilamb_dat = get_ilamb_ds(file_info, attributes["in_var"], filter_options)
-
-    # construct original file name
-    original_file = build_file_paths(
-        config["top_dir"],
-        attributes["sub_dir"],
-        attributes["model"],
-        attributes["filename"],
+    # validate dictionary keys
+    validate_dict_keys(
+        attributes, {"sub_dir", "model", "filename", "in_var"}, "attributes_dict"
     )
 
-    return ilamb_dat, original_file
+    # read dataset
+    file_path = build_ilamb_file_path(
+        top_dir, attributes["sub_dir"], attributes["model"], attributes["filename"]
+    )
+    logger.info(f"Reading ILAMB dataset from {file_path}")
+
+    try:
+        raw_ds = xr.open_dataset(file_path)
+    except FileNotFoundError:
+        raise IOError(f"File not found: {file_path}")
+    except OSError as e:
+        raise IOError(f"Error opening dataset at {file_path}: {e}")
+
+    # check to make sure input  variable is on dataset
+    if attributes["in_var"] not in raw_ds:
+        raise ValueError(f"Variable {attributes['in_var']} not found in raw dataset.")
+
+    # filter on min/max values if present
+    filtered_ds = filter_dataset(
+        raw_ds,
+        attributes["in_var"],
+        attributes.get("max_val", None),
+        attributes.get("min_val", None),
+    )
+    if attributes["in_var"] not in filtered_ds:
+        raise ValueError(
+            f"Variable {attributes['in_var']} not found in dataset after filtering."
+        )
+
+    return filtered_ds, file_path
 
 
 def get_monthly_ds(
@@ -500,63 +558,47 @@ def get_monthly_ds(
     return monthly_ds
 
 
-def get_ilamb_ds(
-    file_info: Dict[str, str], in_var: str, filter_options: Dict[str, Optional[float]]
-) -> xr.Dataset:
-    """Reads in a raw dataset from the ILAMB data repository and potentially filters
-    on date and min/max value
+def build_ilamb_file_path(top_dir: str, sub_dir: str, model: str, filename: str) -> str:
+    """Constructs a file path to a raw ILAMB dataset
 
     Args:
-        file_info (dict): Dictionary containing 'top_dir', 'sub_dir', 'model', and 'filename'.
-        in_var (str): Name of the variable to extract.
-        model (str): model
-        filter_options (dict): Dictionary containing optional filtering parameters:
-            - 'tstart' (str, optional): Start time to filter to.
-            - 'tstop' (str, optional): End time to filter to.
-            - 'max_val' (float, optional): Maximum value filter.
-            - 'min_val' (float, optional): Minimum value filter.
+        top_dir (str): top ILAMB DATA directory
+        sub_dir (str): subdirectory for the variable
+        model (str): model name (also directory)
+        filename (str): file name
 
     Returns:
-        xr.Dataset: ILAMB dataset
+        str: full path to raw ILAMB dataset
     """
 
-    # construct file path
-    file_path = os.path.join(
-        file_info["top_dir"],
-        file_info["sub_dir"],
-        file_info["model"],
-        file_info["filename"],
-    )
-    # read dataset
-    raw_ds = xr.open_dataset(file_path)
-
-    # apply filtering
-    filtered_ds = filter_dataset(raw_ds, in_var, filter_options)
-
-    return filtered_ds
+    return os.path.join(top_dir, sub_dir, model, filename)
 
 
 def filter_dataset(
-    ds: xr.Dataset, var: str, filter_options: Dict[str, Optional[float]]
+    ds: xr.Dataset, var: str, min_val: float = None, max_val: float = None
 ) -> xr.Dataset:
     """Filters a dataset based on value constraints.
 
     Args:
         ds (xr.Dataset): Input dataset.
         var (str): Variable to filter on.
-        filter_options (dict): Dictionary containing optional filtering parameters:
-            - 'max_val' (float, optional): Maximum value constraint.
-            - 'min_val' (float, optional): Minimum value constraint.
+        min_val (float, optional): minimum value constraint. Defaults to None.
+        max_val (float, optional): maximum value constraint. Defaults to None.
 
     Returns:
         xr.Dataset: filtered dataset
+    Raises:
+        KeyError: var not found on dataset
     """
 
+    if var not in ds:
+        raise KeyError(f"Variable '{var}' not found in dataset.")
+    
     # filter by min/max
-    if filter_options.get("max_val") is not None:
-        ds = ds.where(ds[var] <= filter_options["max_val"])
-    if filter_options.get("min_val") is not None:
-        ds = ds.where(ds[var] >= filter_options["min_val"])
+    if max_val is not None:
+        ds = ds.where(ds[var] <= max_val)
+    if min_val is not None:
+        ds = ds.where(ds[var] >= min_val)
 
     return ds
 
@@ -791,7 +833,7 @@ def get_annual_ds(
     return annual_ds
 
 
-def regrid_ilamb_ds(
+def regrid_data(
     ds: xr.Dataset,
     target_grid: xr.Dataset,
     var: str,
@@ -821,22 +863,6 @@ def regrid_ilamb_ds(
     ds_regrid.attrs = ds.attrs
 
     return ds_regrid
-
-
-def extract_land_area(land_area_file: str) -> xr.Dataset:
-    """Extracts land area information from a CLM history file.
-
-    Args:
-        land_area_file (str): Path to the file containing land area data.
-
-    Returns:
-        xr.Dataset: Dataset containing land area information.
-    """
-    ds_grid = xr.open_dataset(land_area_file)
-    land_area = (ds_grid.landfrac * ds_grid.area).to_dataset(name="land_area")
-    land_area["land_area"].attrs["units"] = "km2"
-    return land_area
-
 
 def compile_ilamb_datasets(
     out_dir: str, ilamb_dict: dict, land_area: xr.DataArray

@@ -1,8 +1,9 @@
 """Helper methods"""
-import operator
-from functools import reduce
 
+import operator
+import os
 import yaml
+from functools import reduce
 
 
 def get_config_file(file_name: str) -> dict:
@@ -32,7 +33,7 @@ def evaluate_conversion_factor(factor) -> float:
                 result *= num
             return result
         elif op == "add":
-            return sum(operands)        
+            return sum(operands)
         elif op == "divide":
             if len(operands) < 2:
                 raise ValueError("Divide operation requires at least two operands.")
@@ -48,15 +49,30 @@ def join_nonempty(*parts: list[str]) -> str:
     """
     return " ".join(p for p in parts if p and p.strip())
 
-# def join_nonempty(lat, alt, biome):
-#     """Join logic:
-#     - If altitude is an empty string or NaN, return "latitude biome"
-#     - Otherwise return "altitude biome"
-#     """
-#     def is_empty(val):
-#         return val.strip() == ""
 
-#     if is_empty(alt):
-#         return f"{lat.strip()} {biome.strip()}"
-#     else:
-#         return f"{alt.strip()} {biome.strip()}"
+def should_skip_file(path: str, clobber: bool) -> bool:
+    """Checks whether file should be skipped
+
+    Args:
+        path (str): file path
+        clobber (bool): whether or not to overwrite file that does exist
+
+    Returns:
+        bool: whether to skip file
+    """
+    return os.path.isfile(path) and not clobber
+
+def validate_dict_keys(d: dict, required_keys: set, dict_name: str):
+    """Checks to make sure required dictionary keys are present
+
+    Args:
+        d (dict): input dictionary
+        required_keys (set): set of required keys
+        dict_name (str): name of dictionary
+
+    Raises:
+        ValueError: Missing keys
+    """
+    missing = required_keys - d.keys()
+    if missing:
+        raise ValueError(f"Missing keys in {dict_name}: {', '.join(missing)}")
