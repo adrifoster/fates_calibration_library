@@ -14,7 +14,7 @@ from cartopy.mpl.geocollection import GeoQuadMesh
 import seaborn as sns
 from adjustText import adjust_text
 
-from fates_calibration_library.analysis_functions import month_difference
+from fates_calibration_library.analysis_functions import cyclic_month_difference
 from fates_calibration_library.analysis_functions import calculate_zonal_mean
 
 _COLS = [
@@ -546,7 +546,7 @@ def plot_month_of_max_diff(da1, da2, ds1_name, ds2_name, fates_var):
                 ax, da1, ds1_name, "jet", 0.5, 12.5, diverging_cmap=False
             )
         elif idx == 1:
-            diff = month_difference(da1, da2)
+            diff = cyclic_month_difference(da1, da2)
             pcmdiff = map_function(
                 ax, diff, f"{ds2_name} - {ds1_name}", "PRGn", -5, 5, diverging_cmap=True
             )

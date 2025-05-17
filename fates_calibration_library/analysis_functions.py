@@ -1,16 +1,28 @@
 """Functions to assist with global analysis of observations and model outputs"""
 
 import functools
-import glob
 import os
 from datetime import date
 import xarray as xr
 import numpy as np
 import pandas as pd
 
+from fates_calibration_library.clm_functions import get_files
 
-def month_difference(da1: xr.DataArray, da2: xr.DataArray) -> xr.DataArray:
-    """Calculate the minimum cyclic difference between two xarray DataArrays of months.
+def preprocess(data_set: xr.Dataset, data_vars: list[str]) -> xr.Dataset:
+    """Preprocesses and xarray Dataset by subsetting to specific variables - to be used on read-in
+
+    Args:
+        ds (xr.Dataset): input Dataset
+
+    Returns:
+        xr.Dataset: output Dataset
+    """
+
+    return data_set[data_vars]
+
+def cyclic_month_difference(da1: xr.DataArray, da2: xr.DataArray) -> xr.DataArray:
+    """Calculate the minimum cyclic difference between two xarray DataArrays of months (1-12).
 
     Args:
         da1 (xr.DataArray): first data array
@@ -18,8 +30,14 @@ def month_difference(da1: xr.DataArray, da2: xr.DataArray) -> xr.DataArray:
 
     Returns:
         xr.DataArray: output data array
+    Raises:
+        TypeError: inputs are not xarray.DataArray instances
+        ValueError: input arrays are not the same shape
     """
-
+    if not isinstance(da1, xr.DataArray) or not isinstance(da2, xr.DataArray):
+        raise TypeError("Inputs must be xarray.DataArray instances.")
+    if da1.shape != da2.shape:
+        raise ValueError("Input arrays must have the same shape.")
     diff = da2 - da1
     return xr.where(diff > 6, diff - 12, xr.where(diff < -6, diff + 12, diff))
 
@@ -34,7 +52,9 @@ def adjust_lon(ds: xr.Dataset, lon_name: str) -> xr.Dataset:
     Returns:
         xr.Dataset: Dataset with the longitude values changes
     """
-
+    if lon_name not in ds.variables:
+        raise ValueError(f"{lon_name} not found in dataset.")
+    
     # adjust lon values to make sure they are within (-180, 180)
     ds["longitude_adjusted"] = xr.where(
         ds[lon_name] > 180, ds[lon_name] - 360, ds[lon_name]
@@ -44,27 +64,15 @@ def adjust_lon(ds: xr.Dataset, lon_name: str) -> xr.Dataset:
     # and sort DataArray using new coordinate values
     ds = (
         ds.swap_dims({lon_name: "longitude_adjusted"})
-        .sel(**{"longitude_adjusted": sorted(ds.longitude_adjusted)})
+        .sortby("longitude_adjusted")
         .drop_vars(lon_name)
+        .rename({"longitude_adjusted": lon_name})
     )
 
-    ds = ds.rename({"longitude_adjusted": lon_name})
+    if lon_name not in ds.coords:
+        ds = ds.set_coords(lon_name)
 
     return ds
-
-
-def get_files(hist_dir: str, hstream="h0") -> list[str]:
-    """Returns all clm history files in a directory given an input hstream
-
-    Args:
-        hist_dir (str): directory
-        hstream (str, optional): history level. Defaults to 'h0'.
-
-    Returns:
-        list[str]: list of files
-    """
-    return sorted(glob.glob(f"{hist_dir}/*clm2.{hstream}*.nc"))
-
 
 def calculate_zonal_mean(
     da: xr.DataArray,
@@ -87,14 +95,10 @@ def calculate_zonal_mean(
     # compute area-weighted sum
     area_weighted = (da * land_area).sum(dim="lon")
 
-    # normalize by land area per latitude
+    # normalize by land area per latitude, avoid divide by 0.0
     if conversion_factor is None:
-        conversion_factor = 1 / land_area_by_lat
-
-    # convert units
-    by_lat = conversion_factor * area_weighted
-
-    return by_lat
+        conversion_factor = 1 / land_area_by_lat        
+    return conversion_factor * area_weighted
 
 
 def calculate_month_of_max(monthly_mean: xr.DataArray) -> xr.DataArray:
@@ -197,20 +201,6 @@ def calculate_monthly_mean(
     monthly_mean.name = data_array.name
     return monthly_mean
     
-
-def preprocess(data_set: xr.Dataset, data_vars: list[str]) -> xr.Dataset:
-    """Preprocesses and xarray Dataset by subsetting to specific variables - to be used on read-in
-
-    Args:
-        ds (xr.Dataset): input Dataset
-
-    Returns:
-        xr.Dataset: output Dataset
-    """
-
-    return data_set[data_vars]
-
-
 def post_process_ds(
     hist_dir: str,
     data_vars: list[str],
@@ -570,6 +560,8 @@ def compile_global_ensemble(run_dict, out_vars, var_dict, sparse_grid, sparse_la
         },
         new_units={var: var_dict[var]["annual_units"] for var in out_vars},
     )
+    annual_means['ASA'] = annual_means['FSR']/annual_means['FSDS']
+    annual_means['EF'] = annual_means['EFLX_LH_TOT']/(annual_means['EFLX_LH_TOT'] + annual_means['FSH'])
 
     monthly_means = apply_to_vars(
         ensemble_ds,

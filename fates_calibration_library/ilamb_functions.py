@@ -3,7 +3,7 @@
 import os
 import logging
 from datetime import date
-from typing import Dict, Optional
+from typing import Dict
 from functools import reduce
 import xarray as xr
 import numpy as np
@@ -37,8 +37,8 @@ def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.D
         target_grid (xr.Dataset): Target grid for regridding.
     """
 
-    REQUIRED_CONFIG_KEYS = {"regrid_dir", "clobber", "regrid_tag"}
-    REQUIRED_ILAMB_KEYS = {"in_var", "out_var", "model"}
+    REQUIRED_CONFIG_KEYS = {"top_dir", "regrid_dir", "regrid_tag", "user", "clobber"}
+    REQUIRED_ILAMB_KEYS = {"sub_dir", "model", "in_var"}
 
     # make sure all our keys are here
     validate_dict_keys(config_dict, REQUIRED_CONFIG_KEYS, "config_dict")
@@ -62,7 +62,7 @@ def regrid_all_ilamb_data(config_dict: Dict, ilamb_dict: Dict, target_grid: xr.D
             logger.info(f"File {out_file} for {dataset} exists, skipping")
             continue
 
-        ds_out = regrid_dataset(config_dict, ilamb_dict, attributes, target_grid)
+        ds_out = regrid_dataset(config_dict, attributes, target_grid)
         ds_out.to_netcdf(out_file, mode="w")
 
 
@@ -204,6 +204,11 @@ def get_annual_albedo(rsds, rsds_dict, rsus, rsus_dict, metadata, out_var):
 
     return annual_ds
 
+def filter_incomplete_years(ds, var):
+    
+    monthly_counts = ds[var].groupby('time.year').count()
+    complete_years = monthly_counts.where(monthly_counts == 12, drop=True).year
+    return ds.where(ds['time.year'].isin(complete_years), drop=True)
 
 def process_dataset(
     config_dict: dict,
@@ -251,11 +256,15 @@ def process_dataset(
         le, sh = get_ef_data(
             config_dict["regrid_dir"], le_dict, sh_dict, config_dict["regrid_tag"]
         )
+        le = filter_incomplete_years(le, le_dict['in_var'])
+        sh = filter_incomplete_years(sh, sh_dict['in_var'])
         annual_ds = get_annual_ef(
             le, le_dict, sh, sh_dict, metadata, attributes["out_var"]
         )
 
         le_raw, sh_raw = get_ef_data(config_dict["top_dir"], le_dict, sh_dict)
+        le_raw = filter_incomplete_years(le_raw, le_dict['in_var'])
+        sh_raw = filter_incomplete_years(sh_raw, sh_dict['in_var'])
         annual_original = get_annual_ef(
             le_raw, le_dict, sh_raw, sh_dict, metadata, attributes["out_var"]
         )
@@ -293,6 +302,8 @@ def process_dataset(
         rsds, rsus = get_albedo_data(
             config_dict["regrid_dir"], rsds_dict, rsus_dict, config_dict["regrid_tag"]
         )
+        rsds = filter_incomplete_years(rsds, rsds_dict['in_var'])
+        rsus = filter_incomplete_years(rsus, rsus_dict['in_var'])
         annual_ds = get_annual_albedo(
             rsds, rsds_dict, rsus, rsus_dict, metadata, attributes["out_var"]
         )
@@ -300,6 +311,8 @@ def process_dataset(
         rsds_raw, rsus_raw = get_albedo_data(
             config_dict["top_dir"], rsds_dict, rsus_dict
         )
+        rsds_raw = filter_incomplete_years(rsds_raw, rsds_dict['in_var'])
+        rsus_raw = filter_incomplete_years(rsus_raw, rsus_dict['in_var'])
         annual_original = get_annual_albedo(
             rsds_raw, rsds_dict, rsus_raw, rsus_dict, metadata, attributes["out_var"]
         )
@@ -319,6 +332,8 @@ def process_dataset(
             f"{attributes['model']}_{attributes['out_var'].upper()}_{config_dict['regrid_tag']}.nc",
         )
         regridded_dat = xr.open_dataset(file_name)
+        if attributes['in_var'] != 'biomass':
+            regridded_dat = filter_incomplete_years(regridded_dat, attributes['in_var'])
 
         # prepare metadata
         metadata = {
@@ -327,8 +342,8 @@ def process_dataset(
             "original_file": file_name,
             "user": config_dict["user"],
         }
-
-        # calculate annual dataset
+        
+        # calculate annual data
         annual_ds = get_annual_ds(
             regridded_dat,
             attributes["in_var"],
@@ -336,9 +351,12 @@ def process_dataset(
             evaluate_conversion_factor(attributes["time_conversion_factor"]),
             metadata,
         )
+        
 
         # read in raw data
         ilamb_dat, original_file = read_ilamb_data(config_dict["top_dir"], attributes)
+        if attributes['in_var'] != 'biomass':
+            ilamb_dat = filter_incomplete_years(ilamb_dat, attributes['in_var'])
         annual_original = get_annual_ds(
             ilamb_dat,
             attributes["in_var"],
@@ -384,7 +402,7 @@ def process_dataset(
         ).to_dataset(name=f"{attributes['out_var']}_month_of_max")
         
         climatology_ds = get_ilamb_climatology(monthly_mean, 
-            land_area, f"{attributes['out_var']}_monthly", 
+            land_area, attributes['out_var'], 
             evaluate_conversion_factor(attributes["area_conversion_factor"]))
 
         # return all files combined
@@ -520,8 +538,8 @@ def read_ilamb_data(
     filtered_ds = filter_dataset(
         raw_ds,
         attributes["in_var"],
-        attributes.get("max_val", None),
         attributes.get("min_val", None),
+        attributes.get("max_val", None),
     )
     if attributes["in_var"] not in filtered_ds:
         raise ValueError(
@@ -639,18 +657,11 @@ def get_ef_data(
     le = xr.open_dataset(le_path)
     sh = xr.open_dataset(sh_path)
 
-    le_filter = {
-        "max_val": le_dict.get("max_val", None),
-        "min_val": le_dict.get("min_val", None),
-    }
-    sh_filter = {
-        "max_val": sh_dict.get("max_val", None),
-        "min_val": sh_dict.get("min_val", None),
-    }
-
     # filter by date and min/max
-    le = filter_dataset(le, le_dict["in_var"], le_filter)
-    sh = filter_dataset(sh, sh_dict["in_var"], sh_filter)
+    le = filter_dataset(le, le_dict["in_var"], le_dict.get("min_val", None), 
+                        le_dict.get("max_val", None))
+    sh = filter_dataset(sh, sh_dict["in_var"], sh_dict.get("min_val", None),
+                        sh_dict.get("max_val", None))
 
     return le, sh
 
@@ -713,18 +724,12 @@ def get_albedo_data(
     rsds = xr.open_dataset(rsds_path)
     rsus = xr.open_dataset(rsus_path)
 
-    rsds_filter = {
-        "max_val": rsds_dict.get("max_val", None),
-        "min_val": rsds_dict.get("min_val", None),
-    }
-    rsus_filter = {
-        "max_val": rsus_dict.get("max_val", None),
-        "min_val": rsus_dict.get("min_val", None),
-    }
 
     # filter by date and min/max
-    rsds = filter_dataset(rsds, rsds_dict["in_var"], rsds_filter)
-    rsus = filter_dataset(rsus, rsus_dict["in_var"], rsus_filter)
+    rsds = filter_dataset(rsds, rsds_dict["in_var"], rsds_dict.get("min_val", None),
+                          rsds_dict.get("max_val", None))
+    rsus = filter_dataset(rsus, rsus_dict["in_var"], rsus_dict.get("min_val", None),
+                          rsus_dict.get("max_val", None))
 
     return rsds, rsus
 
@@ -911,19 +916,7 @@ def compile_variable(var: str, models: list[str], out_dir: str) -> xr.Dataset:
     datasets = []
     for model in models:
         file_name = os.path.join(out_dir, f"{model}_{var.upper()}.nc")
-        ds = xr.open_dataset(file_name)
-        processed_ds = (
-            get_average_and_iav(ds, var)
-            if "year" in ds.dims
-            else ds[var].to_dataset(name=var)
-        )
-        if "month" in ds.dims:
-            processed_ds[f"{var}_cycle"] = ds[f"{var}_cycle"]
-            processed_ds[f"{var}_month_of_max"] = ds[f"{var}_month_of_max"]
-            processed_ds[f"{var}_anomaly"] = ds[f"{var}_anomaly"]
-        processed_ds[f"{var}_global"] = ds[f"{var}_global"]
-        datasets.append(processed_ds)
-
+        datasets.append(xr.open_dataset(file_name))
     var_ds = xr.concat(datasets, dim="model", data_vars="all")
     return var_ds.assign_coords(model=("model", models))
 
