@@ -6,7 +6,6 @@ from esem.data_processors import Flatten
 from esem.model_adaptor import GPFlowModel
 from esem.emulator import Emulator
 from esem.utils import get_random_params
-import gpflow
 import pickle
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle

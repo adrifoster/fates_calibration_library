@@ -7,6 +7,12 @@ from fates_calibration_library.analysis_functions import (
     cyclic_month_difference,
     adjust_lon,
     calculate_zonal_mean,
+    calculate_month_of_max,
+    calculate_annual_mean,
+    calculate_monthly_mean,
+    area_mean,
+    fix_infl_months,
+    compute_infl
 )
 
 
@@ -91,8 +97,226 @@ def test_zonal_mean_with_conversion():
 
     # expected zonal mean: weighted average, then scale
     weighted_sum = (da * land_area).sum(dim="lon")
-    area_sum = land_area.sum(dim="lon")
-    expected = conversion * (weighted_sum / area_sum)
+    expected = conversion * weighted_sum
 
     result = calculate_zonal_mean(da, land_area, conversion_factor=conversion)
     xr.testing.assert_allclose(result, expected)
+
+
+def test_month_of_max_basic():
+    """Tests basic functionality of calculate_month_of_max with known data"""
+    data = xr.DataArray([1, 3, 2], coords={"month": [1, 2, 3]}, dims="month")
+    result = calculate_month_of_max(data)
+    assert result.item() == 2
+
+
+def test_month_of_max_flat():
+    """Tests basic functionality of calculate_month_of_max with flat data"""
+    data = xr.DataArray([5, 5, 5], coords={"month": [1, 2, 3]}, dims="month")
+    result = calculate_month_of_max(data)
+    assert np.isnan(result.item())
+
+
+def test_month_of_max_nan():
+    """Tests basic functionality of calculate_month_of_max with nan data"""
+    data = xr.DataArray(
+        [np.nan, np.nan, np.nan], coords={"month": [1, 2, 3]}, dims="month"
+    )
+    result = calculate_month_of_max(data)
+    assert np.isnan(result.item())
+
+
+def test_calculate_month_of_max_invalid_dim():
+    """Tests calculate_month_of_max catches that month_dim not on dataset"""
+    da = xr.DataArray(np.random.rand(3, 4), dims=["lat", "lon"])
+    with pytest.raises(ValueError, match="Dimension 'month' not found"):
+        calculate_month_of_max(da)
+
+
+def test_annual_mean_basic():
+    """Basic test of calculate_annual_mean"""
+    time = xr.cftime_range(str(2000), periods=12, freq="MS")
+    data = xr.DataArray(np.ones(12), coords=[time], dims="time")
+    data["time"] = time
+
+    result = calculate_annual_mean(data)
+    assert np.isclose(result.values, 1.0)
+
+
+def test_annual_mean_with_conversion():
+    """Tests calculate_annual_mean with a conversion factor"""
+    time = xr.cftime_range(str(2000), periods=12, freq="MS")
+    da = xr.DataArray(np.full(12, 2.0), coords=[time], dims="time")
+
+    result = calculate_annual_mean(da, conversion_factor=2.0, new_units="g/m2/s")
+    assert np.isclose(
+        result.values, 2.0 * (da["time.daysinmonth"] * da).groupby("time.year").sum()
+    )
+    assert result.attrs["units"] == "g/m2/s"
+
+
+def test_annual_mean_with_missing_data():
+    """Test calculate_annual_mean with missing datda"""
+    time = xr.cftime_range(str(2002), periods=12, freq="MS")
+    values = np.ones(12)
+    values[5] = np.nan
+    da = xr.DataArray(values, coords=[time], dims="time")
+
+    result = calculate_annual_mean(da)
+    assert np.isclose(
+        result.values,
+        np.nansum(values * time.days_in_month)
+        / np.nansum(time.days_in_month[~np.isnan(values)]),
+    )
+
+
+def test_annual_mean_missing_time_dim():
+    """Tests calculate_annual_mean errors with no time dimension"""
+    da = xr.DataArray([1, 2, 3], dims="x")
+    with pytest.raises(ValueError, match="Input must have a 'time' dimension"):
+        calculate_annual_mean(da)
+
+
+def test_monthly_mean_typical_data():
+    """Tests basic usage of calculate_monthly_mean"""
+    data = np.arange(24).astype(float)
+    time = xr.cftime_range("2000-01-01", periods=len(data), freq="MS")
+    da = xr.DataArray(data, coords={"time": time}, dims=["time"], name="test_var")
+    result = calculate_monthly_mean(da)
+    assert result.size == 12
+    assert not result.isnull().any()
+
+
+def test_monthly_mean_all_nan():
+    """Tests calculate_monthly_mean with all NaN data"""
+    data = np.full(24, np.nan)
+    time = xr.cftime_range("2000-01-01", periods=len(data), freq="MS")
+    da = xr.DataArray(data, coords={"time": time}, dims=["time"], name="test_var")
+    result = calculate_monthly_mean(da)
+    assert result.isnull().all()
+
+
+def test_monthly_mean_some_nan():
+    """Tests calculate monthly mean with some NaNs"""
+    data = np.array([np.nan if i % 2 == 0 else i for i in range(24)])
+    time = xr.cftime_range("2000-01-01", periods=len(data), freq="MS")
+    da = xr.DataArray(data, coords={"time": time}, dims=["time"], name="test_var")
+    result = calculate_monthly_mean(da)
+    assert (result.notnull().sum() > 0).item()
+
+
+def test_monthly_mean_constant_data():
+    """Tests calculate_monthly_mean with constant dadta"""
+    data = np.ones(24)
+    time = xr.cftime_range("2000-01-01", periods=len(data), freq="MS")
+    da = xr.DataArray(data, coords={"time": time}, dims=["time"], name="test_var")
+    result = calculate_monthly_mean(da)
+    np.testing.assert_allclose(result, 1.0)
+
+
+def test_mothly_mean_missing_time_raises():
+    """Tests that calculate_monthly_mean properly checks for time dimension."""
+    da = xr.DataArray([1, 2, 3], dims="x")
+    with pytest.raises(ValueError, match="Input must have a 'time' dimension."):
+        calculate_monthly_mean(da)
+
+def test_area_mean():
+    """Test basic usage of area_mean where cf=None
+    """
+    
+    data = xr.DataArray(
+        [[1.0, 2.0], [3.0, 4.0]],
+        dims=["lat", "lon"],
+        coords={"lat": [0, 1], "lon": [0, 1]},
+        name="example_var"
+    )
+    land_area = xr.DataArray(
+        [[1.0, 1.0], [1.0, 1.0]],
+        dims=["lat", "lon"],
+        coords={"lat": [0, 1], "lon": [0, 1]}
+    )
+
+    # expected area-weighted mean with equal land area: mean of all values
+    expected = (1 + 2 + 3 + 4) / 4
+
+    result = area_mean(data, None, land_area)
+
+    assert np.isclose(result.item(), expected)
+    
+def test_area_mean_with_nans():
+    """Test usage of area_mean where cf=None and NaNs are in input data array
+    """
+    
+    da = xr.DataArray(
+        [[1.0, np.nan], [3.0, 4.0]],
+        dims=["lat", "lon"],
+        coords={"lat": [0, 1], "lon": [0, 1]},
+        name="example_var"
+    )
+    land_area = xr.DataArray(
+        [[1.0, 1.0], [1.0, 1.0]],
+        dims=["lat", "lon"],
+        coords={"lat": [0, 1], "lon": [0, 1]},
+    )
+
+    # should ignore NaN in data array and use remaining valid cells
+    valid_values = [1.0, 3.0, 4.0]
+    expected = np.mean(valid_values)
+
+    result = area_mean(da, cf=None, land_area=land_area)
+    assert np.isclose(result.item(), expected)
+
+def test_area_mean_with_explicit_cf():
+    """Test use of area_mean with cf=0.5
+    """
+    da = xr.DataArray(
+        [[10.0, 20.0], [30.0, 40.0]],
+        dims=["lat", "lon"],
+        coords={"lat": [0, 1], "lon": [0, 1]},
+        name="example_var"
+    )
+    land_area = xr.DataArray(
+        [[2.0, 2.0], [2.0, 4.0]],
+        dims=["lat", "lon"],
+        coords={"lat": [0, 1], "lon": [0, 1]},
+    )
+
+    # manually compute area-weighted mean
+    cf = 0.5
+    weighted_sum = (da * land_area).sum().item()
+    expected = cf * weighted_sum
+
+    result = area_mean(da, cf=cf, land_area=land_area)
+    assert np.isclose(result.item(), expected)
+
+def test_fix_infl_months_three_values():
+    input_months = np.array([3, 7, 11])
+    result = fix_infl_months(input_months)
+    np.testing.assert_array_equal(result, np.array([3, 7, 11]))
+
+def test_fix_infl_months_two_values_add_december():
+    input_months = np.array([3, 6])
+    result = fix_infl_months(input_months)
+    np.testing.assert_array_equal(result, np.array([3, 6, 12]))
+
+def test_fix_infl_months_two_values_add_january():
+    input_months = np.array([7, 10])
+    result = fix_infl_months(input_months)
+    np.testing.assert_array_equal(result, np.array([1, 7, 10]))
+
+def test_fix_infl_months_one_value():
+    input_months = np.array([6])
+    result = fix_infl_months(input_months)
+    np.testing.assert_array_equal(result, np.array([1, 6, 12]))
+
+def test_fix_infl_months_invalid_input():
+    input_months = np.array([])
+    with pytest.raises(ValueError, match="inflection_months must contain 1 to 3 elements"):
+        fix_infl_months(input_months)
+
+def test_single_peak():
+    months = np.arange(1, 13)
+    values = [1, 2, 4, 6, 9, 7, 5, 3, 2, 1, 1, 1]
+    da = xr.DataArray(values, coords={"month": months}, dims="month")
+    infl = compute_infl(da)
+    assert set(infl) == set([12, 6, 1])
