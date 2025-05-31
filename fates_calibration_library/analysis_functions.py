@@ -281,63 +281,35 @@ def compute_infl(da: xr.DataArray, dim="month") -> np.ndarray:
     Raises:
         ValueError: Expected 12 months in dimension and got something else
     """
+
     if da.sizes[dim] != 12:
         raise ValueError(f"Expected 12 months in dimension '{dim}', got {da.sizes[dim]}")
 
-    # compute the first and second derivatives
-    da_vals = da.values
-    first_diff = np.diff(da_vals, axis=-1) >= 0.0
-    second_diff = np.diff(first_diff.astype(int), axis=-1) != 0
-
-    # pad with two False values at the beginning to match original length
-    pad = np.zeros((*second_diff.shape[:-1], 2), dtype=bool)
-    padded = np.concatenate([pad, second_diff], axis=-1)
+    # compute the first derivative
+    first_deriv = np.gradient(da)
+    first_diff = np.sign(first_deriv)
     
-    infl = xr.DataArray(padded, coords=da.coords, dims=da.dims)
-
-    # get months where inflection points occur
-    infl_months = da[dim].where(infl).values
-    # remove NaNs
-    non_nan_months = infl_months[~np.isnan(infl_months)]
-
-    return fix_infl_months(non_nan_months)
-
-
-def fix_infl_months(inflection_months: np.ndarray) -> np.ndarray:
-    """Ensures an array of monthly inflection points contains 3 values by
-    appending January (1) or December (12) when needed.
-
-    Args:
-        inflection_months (np.ndarray): Array of inflection point months (1–12)
-
-    Returns:
-        np.ndarray: Sorted array of 3 inflection months
-    Raises:
-        ValueError: inflection_months must contain 1 to 3 elements
-    """
-
-    # hard-coded months
-    JAN = 1
-    DEC = 12
-    JUN = 6
+    # find inflection points
+    inflection_points = []
+    for p in np.arange(1, len(first_deriv)):
+        diff = first_diff[p] - first_diff[p-1]
+        if diff != 0:
+            if first_diff[p-1] == 0.0:
+                inflection_points.append(da[dim][p])
+            elif first_diff[p] == 0.0:
+                inflection_points.append(da[dim][p-1])
+            elif first_diff[p-1] == 1.0:
+                inflection_points.append(da[dim][p-1])
+            else:
+                inflection_points.append(da[dim][p])
     
-    # check number of months
-    if len(inflection_months) == 3:
-        return inflection_months  # return as is
-
-    elif len(inflection_months) == 2:
-        if inflection_months[0] <= JUN:
-            # assume we're missing the last month
-            return np.sort(np.append(inflection_months, DEC))
-        else:
-            # assume we're missing the first month
-            return np.sort(np.append(JAN, inflection_months))
-    elif len(inflection_months) == 1:
-        # assume only have peak
-        return np.sort(np.append(inflection_months, (DEC, JAN)))
-    else:
-        raise ValueError("inflection_months must contain 1 to 3 elements.")
-
+    # append start/end points if they are trending
+    if first_diff[0] != 0.0:
+        inflection_points.append(da[dim][0])
+    if first_diff[-1] != 0.0:
+        inflection_points.append(da[dim][-1])
+        
+    return np.sort(np.unique(inflection_points))
 
 def get_start_end_slopes(da, infl_months):
 

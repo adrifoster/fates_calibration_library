@@ -5,6 +5,7 @@ import functools
 import xarray as xr
 import numpy as np
 import geopandas as gpd
+import cartopy.crs as ccrs
 from shapely.geometry import Point
 import matplotlib
 from fates_calibration_library.analysis_functions import (
@@ -538,14 +539,23 @@ def get_holdridge_dat(clm_ds, elevation):
     return clim_dat
     
                                              
-def plot_whittaker_biomes(whit_ds):
+def plot_whittaker_biomes(whit_ds, lats=None, lons=None):
 
     colors, names = get_biome_palette()
     cmap = matplotlib.colors.ListedColormap(list(colors.values()))
 
     figure, axes = generate_subplots(1)
-    pcm = map_function(axes[0], whit_ds, "Whittaker Biomes", cmap, -0.5, 9.5)
+    pcm = map_function(axes[0], whit_ds, None, cmap, -0.5, 9.5)
     cbar = figure.colorbar(pcm, ax=axes[0], fraction=0.03, orientation="vertical")
+    if lats is not None:
+        axes[0].scatter(
+            lons,
+            lats,
+            s=15,
+            c="none",
+            edgecolor="black",
+            transform=ccrs.PlateCarree()
+        )
     cbar.set_label("Biome", size=12, fontweight="bold")
     cbar.set_ticks([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     cbar.set_ticklabels(names)

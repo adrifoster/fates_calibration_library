@@ -373,11 +373,17 @@ def compile_global_ensemble(
         },
         new_units={var: var_dict[var]["annual_units"] for var in out_vars},
     )
-    annual_means["ASA"] = annual_means["FSR"] / annual_means["FSDS"]
-    annual_means["EF"] = annual_means["EFLX_LH_TOT"] / (
-        annual_means["EFLX_LH_TOT"] + annual_means["FSH"]
-    )
-
+    
+    sh = annual_means['FSH']
+    le = annual_means['EFLX_LH_TOT']
+    sh = sh.where((sh > 0.0) & (le > 0.0) & ((le + sh) > 0.0))
+    le = le.where((sh > 0.0) & (le > 0.0) & ((le + sh) > 0.0))
+    fsr = annual_means["FSR"].where(annual_means["FSDS"] > 0.0)
+    fsds = annual_means["FSDS"].where(annual_means["FSDS"] > 0.0)
+    
+    annual_means["ASA"] = fsr/fsds
+    annual_means["EF"] = le/(sh + le)
+    
     monthly_means = apply_to_vars(
         ensemble_ds,
         out_vars,
@@ -431,18 +437,6 @@ def compile_global_ensemble(
         )
         climatology.to_netcdf(climatology_filename)
         
-    biome_climatology_filename = os.path.join(
-        run_dict["out_dir"], f'{run_dict["ensemble_name"]}_biome_climatology.nc'
-    )
-    if os.path.isfile(biome_climatology_filename) and not run_dict.get("clobber", False):
-        print(f"File {biome_climatology_filename} exists, skipping")
-    else:
-        biome_climatology = get_sparse_area_means(
-            monthly_means, "biome", out_vars, var_dict, sparse_land_area, biome
-        )
-        biome_climatology.to_netcdf(biome_climatology_filename)
-
-
     # get area means
     area_means_filename = os.path.join(
         run_dict["out_dir"], f'{run_dict["ensemble_name"]}_area_means.nc'

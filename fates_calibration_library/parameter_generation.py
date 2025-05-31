@@ -249,7 +249,8 @@ def create_oaat_param_ensemble(
 
 
 def get_lh_values(
-    lh_value: float, param_dat: dict, parameter: str, default_value: np.ndarray
+    lh_value: float, param_dat: dict, parameter: str, default_value: np.ndarray,
+    by_pft: bool=False, pfts: list[int] = None,
 ) -> np.ndarray:
     """Gets values for a parameter based on an input latin hypercube value (0-1), appropriately
     scaled between min and max parameter values
@@ -259,6 +260,7 @@ def get_lh_values(
         param_dat (dict): dictionary with information about the parameters
         parameter (str): parameter name
         default_value (np.ndarray): default parameter values
+        by_pft (bool, optional): whether or not to treat each PFT-parameter independently
 
     Returns:
         np.ndarray: output parameter values
@@ -278,11 +280,18 @@ def get_lh_values(
     max_value = get_param_value(
         change_str_max, default_value, param_dat, parameter, "param_max"
     )
+    
+    if 'fates_pft' in get_param_dims(main_param, parameter) and by_pft:
+        for i, pft in enumerate(pfts):
+            param_value = unnormalize(lh_value[i], min_value[pft-1], max_value[pft-1])
+            default_value[pft-1] = param_value
+        return default_value
+    else:
 
-    # create updated value from lh_value
-    param_value = unnormalize(lh_value, min_value, max_value)
+        # create updated value from lh_value
+        param_value = unnormalize(lh_value, min_value, max_value)
 
-    return param_value
+        return param_value
 
 
 def get_root_values(
@@ -354,6 +363,8 @@ def set_lh_param_value(
     i: int,
     jags_dict: dict=None,
     sample_dict: dict=None,
+    by_pft: bool=False,
+    pfts: list[int]=None,
 ) -> xr.Dataset:
     """Sets a parameter value on an input dataset for a latin hypercube ensemble
 
@@ -367,10 +378,13 @@ def set_lh_param_value(
         parameter (str): parameter name
         keep_pfts (list[int]): list of pft integers to fix at default values
         param_dat (dict): dictionary of information about parameters
+        by_pft (bool): whether or not to treat each pft-specific variable as independent.
 
     Returns:
         xr.Dataset: output parameter set
     """
+    if not by_pft:
+        pfts = None
     
     # get the actual parameter name (some could be proxies)
     if param_type == "default":
@@ -389,7 +403,8 @@ def set_lh_param_value(
     if param_type == "default":
 
         # just get the values normally
-        param_value = get_lh_values(value, param_dat, actual_param_name, default_value)
+        param_value = get_lh_values(value, param_dat, actual_param_name, default_value,
+                                    by_pft, pfts)
 
     elif param_type == "scale_from_rootparam":
 
@@ -405,7 +420,8 @@ def set_lh_param_value(
 
         # get the change value
         delta_value = get_lh_values(
-            value, param_dat, parameter, PARAM_INFO[parameter]["default_value"]
+            value, param_dat, parameter, PARAM_INFO[parameter]["default_value"],
+            by_pft, pfts
         )
 
         # actual value is root + delta
@@ -413,13 +429,14 @@ def set_lh_param_value(
         
     elif param_type == "array_index":
         
-        param_value = get_lh_values(value, param_dat, parameter, default_value)
+        param_value = get_lh_values(value, param_dat, parameter, default_value, by_pft, pfts)
         ds_value = ds[actual_param_name].values.copy()
         for i in range(len(param_value)):
             if i != PARAM_INFO[parameter]['array_index']:
                 param_value[i] = ds_value[i]
                 
     elif param_type == 'jags':
+        
         param_dict = sample_dict[parameter]
         param_value = get_sample_values(default_value, i, param_dict, jags_dict, parameter, 
                                        actual_param_name)
@@ -448,6 +465,23 @@ def get_sample_values(default_value, i, param_dict, jags_dict, parameter, actual
                 default_value[k][pft-1] = value
         return default_value
 
+def get_param_dims(main_param, param):
+    dim = main_param[main_param.fates_parameter_name == param].coord.values[0].split(",")
+    return [c.replace("[", "").replace("]","").replace("'", "").strip() for c in dim]
+
+def get_pft_and_global_params(params, main_param):
+    
+    pft_params = []
+    global_params = []
+    for param in params:
+        if 'fates_pft' in get_param_dims(main_param, param):
+            pft_params.append(param)
+        else:
+            global_params.append(param)
+    
+    return pft_params, global_params
+
+
 def create_lh_param_ensemble(
     params: list[str],
     num_samples: int,
@@ -456,8 +490,9 @@ def create_lh_param_ensemble(
     out_dir: str,
     param_prefix: str,
     lh_sample: np.ndarray[float]=None,
-    keep_pfts: list[int] = None,
-    jags_dict: dict=None
+    keep_pfts: list[int]=None,
+    jags_dict: dict=None,
+    by_pft: bool=False,
 ):
     """Generates an ensemble of Latin Hypercube parameter files
 
@@ -470,6 +505,7 @@ def create_lh_param_ensemble(
         param_prefix (str): parameter file prefix
         lh_sample (np.ndarray[float], optional): Latin Hypercube sample. Defaults to None.
         keep_pfts (list[str], optional): list of pft to be left at default values. Defaults to None.
+        by_pft (bool, optional). Whether or not to treat each pft-specific parameter as its own parameter. Default to False.
     """
 
     if keep_pfts is None:
@@ -477,9 +513,25 @@ def create_lh_param_ensemble(
     
     num_params = len(params)
     
+    # get information about all parameter data
+    main_param = param_dat["main"]
+    
+    if by_pft:
+        pft_params, global_params = get_pft_and_global_params(params, main_param)
+        params = np.append(pft_params, global_params)
+        
+        pftnames = default_param_data['fates_pftname'].values
+        all_pfts = np.arange(1, len(pftnames)+1)
+        pfts = [pft for pft in all_pfts if pft not in keep_pfts]
+        num_pfts = len(pfts)
+    
     if lh_sample is None:
         # create a latin hypercube
-        sampler = qmc.LatinHypercube(d=num_params)
+        if by_pft:
+            total_dims = len(pft_params) * num_pfts + len(global_params)
+            sampler = qmc.LatinHypercube(d=total_dims)
+        else:
+            sampler = qmc.LatinHypercube(d=num_params)
         lh_sample = sampler.random(n=num_samples)
     else:
         # check to make sure input latin hypercube sample matches other inputs
@@ -488,25 +540,42 @@ def create_lh_param_ensemble(
         elif lh_sample.shape[1] != num_params:
             raise Exception(f"LH parameter number {lh_sample.shape[1]} is not the same size as parameter number {num_params}")
 
-    # get information about all parameter data
-    main_param = param_dat["main"]
-    
-    sample_dict = {}
-    for par, info in jags_dict.items():
-        param_dict = {}
-        for pft, pft_dat in info['data'].items():
-            param_dict[pft] = pft_dat.sample(n=num_samples)
-        sample_dict[par] = param_dict
+    if jags_dict is not None:
+        sample_dict = {}
+        for par, info in jags_dict.items():
+            param_dict = {}
+            for pft, pft_dat in info['data'].items():
+                param_dict[pft] = pft_dat.sample(n=num_samples)
+            sample_dict[par] = param_dict
 
     # loop through each row of latin hypercube and create a parameter file
     for i, sample in enumerate(lh_sample):
 
         # new parameter file
         ds = default_param_data.copy(deep=False)
+        
+        if by_pft:
+            
+            param_values = {}
+            pft_size = len(pft_params) * num_pfts
+            pft_section = sample[:pft_size]
+            global_section = sample[pft_size:]
 
+            pft_reshaped = pft_section.reshape((len(pft_params), num_pfts))
+
+            for i, param in enumerate(pft_params):
+                param_values[param] = pft_reshaped[i, :]  # shape: (num_pfts,)
+
+            for i, param in enumerate(global_params):
+                param_values[param] = global_section[i]  # scalar
+            
+            sample = param_values
+            
         # loop through each column (i.e. parameter)
         for j, value in enumerate(sample):
-
+            if by_pft:
+                value = sample[value]
+                
             # get information about this parameter
             sub = main_param[main_param.fates_parameter_name == params[j]]
 
@@ -523,22 +592,23 @@ def create_lh_param_ensemble(
                 param_dat,
                 i,
                 jags_dict,
-                sample_dict
+                sample_dict,
+                by_pft
             )
 
-        # output to file
-        ds.to_netcdf(os.path.join(out_dir, f"{param_prefix}_{generate_suffix(i+1)}.nc"))
+    #     # output to file
+    #     ds.to_netcdf(os.path.join(out_dir, f"{param_prefix}_{generate_suffix(i+1)}.nc"))
 
-    # write out the key and list of files
-    lh_key = pd.DataFrame(lh_sample)
-    lh_key.columns = params
-    lh_key["ensemble"] = [
-        f"{param_prefix}_{generate_suffix(ens)}"
-        for ens in np.arange(1, num_samples + 1)
-    ]
-    lh_key.to_csv(os.path.join(out_dir, f"{param_prefix.lower()}_key.csv"))
+    # # write out the key and list of files
+    # lh_key = pd.DataFrame(lh_sample)
+    # lh_key.columns = params
+    # lh_key["ensemble"] = [
+    #     f"{param_prefix}_{generate_suffix(ens)}"
+    #     for ens in np.arange(1, num_samples + 1)
+    # ]
+    # lh_key.to_csv(os.path.join(out_dir, f"{param_prefix.lower()}_key.csv"))
 
-    write_ensemble_list(param_prefix, lh_key.ensemble.values, out_dir)
+    # write_ensemble_list(param_prefix, lh_key.ensemble.values, out_dir)
 
 
 def get_percentage_change(param_change: str) -> float:

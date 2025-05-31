@@ -11,6 +11,7 @@ from matplotlib.lines import Line2D
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.mpl.geocollection import GeoQuadMesh
+from matplotlib.patches import Patch
 import seaborn as sns
 from adjustText import adjust_text
 
@@ -61,7 +62,7 @@ _CATEGORY_COLORS = {
 _CATEGORY_LABELS = {
     'hydrology': 'Hydrology',
     'biophysics': 'Biophysics',
-    'stomatal': 'Stomatal Conductance & \nPhotosynthesis',
+    'stomatal': 'Stomatal \nConductance & \nPhotosynthesis',
     'biogeochemistry': 'Biogeochemistry',
     'land use': 'Land Use',
     'fire': 'Fire'
@@ -84,7 +85,9 @@ _SUBCATEGORY_LABELS = {
         'vegetation water': 'Vegetation water',
         'latent': 'Sensible and latent heat',
         'radiation': 'Radiation',
-        'soil water': 'Soil hydraulics'
+        'soil water': 'Soil hydraulics',
+        'snow': 'Snow',
+        'thermal': 'Soil thermal properties',
 }
 
 
@@ -454,10 +457,10 @@ def map_function(
     return pcm
 
 
-def get_blank_plot():
+def get_blank_plot(width=7, height=5):
     """Generates a blank plot"""
 
-    plt.figure(figsize=(7, 5))
+    plt.figure(figsize=(width, height))
     ax = plt.subplot(111)
     ax.spines["top"].set_visible(False)
     ax.spines["bottom"].set_visible(False)
@@ -892,44 +895,75 @@ def plot_oaat_params(param_dat: pd.DataFrame, model: str):
     """
     
     # count up totals, update names of subcategory
-    param_counts_total = (param_dat.groupby(['category', 'subcategory']).size().reset_index(name='num'))
+    param_counts_total = (param_dat.groupby(['category', 'subcategory', 'type']).size().reset_index(name='num'))
     param_counts_total['subcategory_label'] = param_counts_total['subcategory'].map(_SUBCATEGORY_LABELS)
-
+    
+    # createa pivot table
+    pivot = param_counts_total.pivot_table(index=['subcategory_label', 'category'], columns='type', values='num', fill_value=0)
+    
     # re-order subcategory
     subcategory_order = ['Fire', 'Land use', 'Allocation', 'Allometry', 'Decomposition',
                          'Mortality', 'Nutrient uptake', 'Phenology', 'Recruitment',
                          'Respiration', 'Vegetation dynamics', 'Acclimation',
-                         'Photosynthesis', 'Vegetation water', 'Sensible and latent heat', 'Radiation',
-                         'Soil hydraulics']
-    subcategory_order.reverse()
+                         'Photosynthesis', 'Vegetation water', 'Radiation', 'Sensible and latent heat',
+                         'Soil thermal properties', 'Soil hydraulics', 'Snow']
+    
+    # get rid of subcategories that are not present
+    subcategory_present = param_counts_total['subcategory_label'].unique()
+    filtered_order = [s for s in subcategory_order if s in subcategory_present]
+    
+    subcategory_to_y = {label: i for i, label in enumerate(filtered_order)}
+    
+    # re-order pivot table
+    pivot = pivot.reset_index()
+    pivot = pivot[pivot['subcategory_label'].isin(subcategory_order)]
+    pivot['y'] = pivot['subcategory_label'].map(subcategory_to_y)
+    pivot = pivot.sort_values('y')
 
     plt.figure(figsize=(10, 8))
     sns.set_theme(style="whitegrid")
     
-    ax = sns.barplot(
-        data=param_counts_total,
-        y='subcategory_label',
-        x='num',
-        hue='category',
-        palette=_CATEGORY_COLORS,
-        order=subcategory_order
-    )
+    legend_elements = {}
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for _, row in pivot.iterrows():
+    
+        y = row['y']
+        category = row['category']
+        fates_val = row.get('FATES', 0)
+        clm_val = row.get('CLM', 0)
+        color = _CATEGORY_COLORS.get(category, '#cccccc')
+
+        if fates_val > 0:
+            ax.barh(y, fates_val, color=color)
+            legend_elements[category] = Patch(facecolor=color, label=category)
+
+        if clm_val > 0:
+            ax.barh(y, clm_val, left=fates_val, color=color, hatch='///')
+            legend_elements[category] = Patch(facecolor=color, label=category)
+    
+    # add clm and fates parameters
+    legend_elements['CLM parameters'] = Patch(facecolor='white', edgecolor='black', hatch='///', label='CLM parameters')
+    legend_elements['FATES parameters'] = Patch(facecolor='white', edgecolor='black', label='FATES parameters')
+    
+    yticks = [subcategory_to_y[label] for label in subcategory_order if label in pivot['subcategory_label'].unique()]
+    yticklabels = [label for label in subcategory_order if label in pivot['subcategory_label'].unique()]
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(yticklabels)
     
     ax.set_xlabel('Number of Parameters')
     ax.set_ylabel('')
     ax.set_title(f'{model} Parameters')
     
-    handles, labels = ax.get_legend_handles_labels()
-    new_labels = [_CATEGORY_LABELS[label] for label in labels]
+    handles = legend_elements.values()
+    labels = [_CATEGORY_LABELS.get(label, label) for label in legend_elements.keys()]
     ax.legend(
         handles=handles,
-        labels=new_labels,
+        labels=labels,
         title=None,
         loc='lower center',
         bbox_to_anchor=(0.5, -0.25),
         ncol=2
     )
-    
     plt.tight_layout()
 
 def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units,
@@ -943,7 +977,7 @@ def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units,
     ensemble_plot_index = np.arange(1, len(ensemble_valid) + 1)
     ensemble_index_map = dict(zip(ensemble_valid, ensemble_plot_index))
     
-    get_blank_plot()
+    get_blank_plot(width=9)
     plt.axhline(y=default_sim[variable].mean().values, color='k', linestyle='--', linewidth=1)
     
     plt.grid(
@@ -1000,25 +1034,28 @@ def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units,
     
     legend1 = plt.legend(
         handles=category_handles,
-        loc='lower center',
-        bbox_to_anchor=(0.5, -0.25),
-        borderaxespad=-1,
+        loc='upper left',
+        bbox_to_anchor=(1.02, 0.9),
+        borderaxespad=-0.0,
+        fontsize="10",
         title=None,
-        ncol=2,
+        ncol=1,
         frameon=False,
     )
     if combined_sim:
-        legend2 = plt.legend(
+        plt.legend(
             handles=source_handles,
             loc='upper left',
             bbox_to_anchor=(1.02, 0.6),
             borderaxespad=0.0,
             frameon=False,
+            fontsize="10",
             ncol=1,
         )
         plt.gca().add_artist(legend1) 
     plt.xlabel('Ensemble Member')
     plt.ylabel(f"{ylabel} ({units})")
+    plt.tight_layout()
     
     
 def plot_top_n(ds, default, variable, ylabel, units):
@@ -1248,28 +1285,6 @@ def plot_oaat_zonal(zonal_ens, default, variable, variable_name, units,
     plt.ylabel("Latitude (º)", fontsize=11)
     plt.xlabel(f"Annual {variable_name} ({units})", fontsize=11)
     plt.legend(loc="upper right")
-
-    # Highlight & annotate interesting ensembles
-    # for ens in interesting_ensembles:
-    #     sub = climatology_ens.sel(ensemble=ens)
-    #     param_name = climatology_ens.sel(ensemble=ens).parameter_name.values
-    #     type = climatology_ens.sel(ensemble=ens).type.values
-    #     label = f'{param_name} {type}'
-    #     line = plt.plot(sub[variable].month, sub[variable], color='k')[0]
-    #     x = 6
-    #     y = sub[variable].sel(month=x).values
-    #     texts.append(
-    #         plt.text(
-    #             x + 0.2, y, label,
-    #             fontsize=9,
-    #             bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='black', alpha=0.8)
-    #         )
-    #     )
-    # adjust_text(
-    #     texts,
-    #     arrowprops=dict(arrowstyle='->', color='black'),
-    #     only_move={'points': 'y', 'texts': 'xy'}
-    # )
     plt.tight_layout()
     
 def plot_params(default_param_data, param_ds, parameter):

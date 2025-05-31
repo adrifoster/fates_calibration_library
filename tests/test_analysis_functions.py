@@ -11,7 +11,6 @@ from fates_calibration_library.analysis_functions import (
     calculate_annual_mean,
     calculate_monthly_mean,
     area_mean,
-    fix_infl_months,
     compute_infl
 )
 
@@ -289,34 +288,10 @@ def test_area_mean_with_explicit_cf():
     result = area_mean(da, cf=cf, land_area=land_area)
     assert np.isclose(result.item(), expected)
 
-def test_fix_infl_months_three_values():
-    input_months = np.array([3, 7, 11])
-    result = fix_infl_months(input_months)
-    np.testing.assert_array_equal(result, np.array([3, 7, 11]))
-
-def test_fix_infl_months_two_values_add_december():
-    input_months = np.array([3, 6])
-    result = fix_infl_months(input_months)
-    np.testing.assert_array_equal(result, np.array([3, 6, 12]))
-
-def test_fix_infl_months_two_values_add_january():
-    input_months = np.array([7, 10])
-    result = fix_infl_months(input_months)
-    np.testing.assert_array_equal(result, np.array([1, 7, 10]))
-
-def test_fix_infl_months_one_value():
-    input_months = np.array([6])
-    result = fix_infl_months(input_months)
-    np.testing.assert_array_equal(result, np.array([1, 6, 12]))
-
-def test_fix_infl_months_invalid_input():
-    input_months = np.array([])
-    with pytest.raises(ValueError, match="inflection_months must contain 1 to 3 elements"):
-        fix_infl_months(input_months)
-
-def test_single_peak():
+def test_compute_infl_single_peak():
     months = np.arange(1, 13)
     values = [1, 2, 4, 6, 9, 7, 5, 3, 2, 1, 1, 1]
     da = xr.DataArray(values, coords={"month": months}, dims="month")
     infl = compute_infl(da)
-    assert set(infl) == set([12, 6, 1])
+    expected = np.array([1, 5, 10])
+    np.testing.assert_array_equal(infl, expected)

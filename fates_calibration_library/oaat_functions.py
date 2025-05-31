@@ -2,6 +2,7 @@
 
 import xarray as xr
 import numpy as np
+import os
 import pandas as pd
 
 from fates_calibration_library.analysis_functions import compute_infl, get_start_end_slopes
@@ -211,7 +212,7 @@ def get_top_n(ds: xr.Dataset, df_diffs: pd.DataFrame, variable: str, n: int,
     return pd.DataFrame(results)
 
 
-def get_ensemble_slopes(ds, fates_param_dat, default_ind=0,
+def get_ensemble_slopes(ds, fates_param_dat,
                         skip_vars=['category', 'subcategory', 'type', 'parameter_name']):
     if skip_vars is None:
         skip_vars = []
@@ -252,3 +253,230 @@ def get_ensemble_slopes(ds, fates_param_dat, default_ind=0,
     slope_end_ds = xr.merge([slope_end_ds, fates_param_dat])
     
     return slope_start_ds, slope_end_ds
+
+def get_nonzero_params(ds, var='sum_diff'):
+    return np.unique(ds.where(ds[var] > 0.0, drop=True).parameter_name.values)
+
+def get_params(fates_ds, fates_clm_ds, clm_ds, var='sum_diff'):
+    
+    fates_only_parameters = get_nonzero_params(fates_ds, var=var)
+    fates_clm_parameters = get_nonzero_params(fates_clm_ds, var=var)
+    clm_parameters = get_nonzero_params(clm_ds, var=var)
+    
+    clm_only_parameters = [param for param in clm_parameters if param not in fates_clm_parameters]
+    shared_parameters = [param for param in clm_parameters if param in fates_clm_parameters]
+
+    out_dict = {'fates_only': fates_only_parameters,
+                'fates_clm': fates_clm_parameters,
+                'clm_parameters': clm_parameters,
+                'clm_only': clm_only_parameters,
+                'shared': shared_parameters}
+    
+    return out_dict
+
+def get_fates_paramdiffs(param_dir, param_prefix, default_param, fates_params,
+                         param_dat):
+
+    diffs = {}
+    for param in fates_params:
+        diffs[param] = {}
+        ensembles = param_dat.where(param_dat.parameter_name == param, drop=True)
+        min = ensembles.where(ensembles.type == 'min', drop=True).ensemble.values[0]
+        max = ensembles.where(ensembles.type == 'max', drop=True).ensemble.values[0]
+        min_file = os.path.join(param_dir, f"{param_prefix}{str(min).zfill(3)}.nc")
+        max_file = os.path.join(param_dir, f"{param_prefix}{str(max).zfill(3)}.nc")
+        ds_min = xr.open_dataset(min_file)
+        ds_max = xr.open_dataset(max_file)
+    
+        if param == 'fates_stoich_nitr_1':
+            pmax = np.mean(ds_max['fates_stoich_nitr'].isel(fates_plant_organs=0).values)
+            pmin = np.mean(ds_min['fates_stoich_nitr'].isel(fates_plant_organs=0).values)
+            pbaseline = np.mean(default_param['fates_stoich_nitr'].isel(fates_plant_organs=0).values)
+        else:
+            pmax = np.mean(ds_max[param].values)
+            pmin = np.mean(ds_min[param].values)
+            pbaseline = np.mean(default_param[param].values)
+            
+        diffs[param]['min_reldiff'] = np.abs(pmin - pbaseline)/pbaseline
+        diffs[param]['max_reldiff'] = np.abs(pmax - pbaseline)/pbaseline
+        diffs[param]['min_diff'] = np.abs(pmin - pbaseline)
+        diffs[param]['max_diff'] = np.abs(pmax - pbaseline)
+        diffs[param]['diff'] = np.abs(pmax - pmin)
+        diffs[param]['reldiff'] = np.abs(pmax - pmin)/np.abs(pbaseline)
+
+    return pd.DataFrame.from_dict(diffs, orient='index')
+
+def get_clm_paramdiffs(param_dir, param_prefix, default_param, clm_params,
+                        param_dat, nlmods):
+    
+    diffs = {}
+    for param in clm_params:
+        diffs[param] = {}
+        ensembles = param_dat.where(param_dat.parameter_name == param, drop=True)
+        
+        if param in default_param.data_vars:
+            pbaseline = np.mean(default_param[param].values)
+        else: 
+            nlmods_sub = nlmods[nlmods.parameter_name == param]
+            pbaseline = nlmods_sub['default_value'].values[0]
+
+        if (ensembles.type == 'min').any():
+            
+            min = ensembles.where(ensembles.type == 'min', drop=True).ensemble.values[0]
+            
+            if param in default_param.data_vars:
+                min_file = os.path.join(param_dir, f"{param_prefix}{str(min).zfill(4)}.nc")
+                ds_min = xr.open_dataset(min_file)
+                pmin = np.mean(ds_min[param].values)
+            else:
+                nlmods_sub = nlmods[nlmods.parameter_name == param]
+                pmin = nlmods_sub['min_value'].values[0]
+
+            diffs[param]['min_reldiff'] = np.abs(pmin - pbaseline)/pbaseline
+            diffs[param]['min_diff'] = np.abs(pmin - pbaseline)
+        else:
+            diffs[param]['min_reldiff'] = np.nan
+            diffs[param]['min_diff'] = np.nan
+            pmin = pbaseline
+
+        if (ensembles.type == 'max').any():
+            max = ensembles.where(ensembles.type == 'max', drop=True).ensemble.values[0]
+            
+            if param in default_param.data_vars:
+                max_file = os.path.join(param_dir, f"{param_prefix}{str(max).zfill(4)}.nc")
+                ds_max = xr.open_dataset(max_file)
+                pmax = np.mean(ds_max[param].values)
+            else:
+                nlmods_sub = nlmods[nlmods.parameter_name == param]
+                pmax = nlmods_sub['max_value'].values[0]
+            
+            diffs[param]['max_reldiff'] = np.abs(pmax - pbaseline)/pbaseline
+            diffs[param]['max_diff'] = np.abs(pmax - pbaseline)
+        else:
+            diffs[param]['max_reldiff'] = np.nan
+            diffs[param]['max_diff'] = np.nan
+            pmax = pbaseline
+        
+        diffs[param]['diff'] = np.abs(pmax - pmin)
+        diffs[param]['reldiff'] = np.abs(pmax - pmin)/np.abs(pbaseline)
+        
+    return pd.DataFrame.from_dict(diffs, orient='index')
+
+def get_vardiff(da, baseline_dat, variables, params, reldiff=False):
+    
+    all_var_dfs = {}
+    for variable in variables:
+        var_diffs = {}
+
+        for param in params:
+            var_diffs[param] = {}
+
+            dat = da.where(da.parameter_name == param, drop=True)
+            
+            if (dat.type == 'min').any():
+                var_min = dat.where(dat.type == 'min', drop=True)
+            else:
+                var_min = da.isel(ensemble=0)
+            
+            if (dat.type == 'max').any():
+                var_max = dat.where(dat.type == 'max', drop=True)
+            else:
+                var_max = da.isel(ensemble=0)
+            
+            if reldiff:
+                var_diff = np.abs(var_max[variable].values - var_min[variable].values)/baseline_dat[variable].values
+            else:
+                var_diff = np.abs(var_max[variable].values - var_min[variable].values)
+            
+            diff = var_diff[0]*100.0
+            var_diffs[param][variable] = diff
+
+        var_df = pd.DataFrame.from_dict(var_diffs, orient='index')
+        all_var_dfs[variable] = var_df
+    
+    return pd.concat(all_var_dfs.values(), axis=1)
+
+def get_S1diff(da, baseline_dat, variables, params, diff_df, reldiff=False):
+    
+    all_var_dfs = {}
+    for variable in variables:
+        var_diffs = {}
+
+        for param in params:
+            var_diffs[param] = {}
+
+            param_diffs = diff_df[diff_df.index == param]
+            dat = da.where(da.parameter_name == param, drop=True)
+            
+            if (dat.type == 'min').any():
+                var_min = dat.where(dat.type == 'min', drop=True)
+                if reldiff:
+                    var_mindiff = (np.abs(var_min[variable].values - baseline_dat[variable].values)/baseline_dat[variable].values)
+                else:
+                    var_mindiff = np.abs(var_min[variable].values - baseline_dat[variable].values)
+                s1_min = var_mindiff[0]/(param_diffs.min_reldiff.values[0])
+            else:
+                s1_min = np.nan
+            
+            if (dat.type == 'max').any():
+                var_max = dat.where(dat.type == 'max', drop=True)
+                if reldiff:
+                    var_maxdiff = (np.abs(var_max[variable].values - baseline_dat[variable].values)/baseline_dat[variable].values)
+                else:
+                    var_maxdiff = np.abs(var_max[variable].values - baseline_dat[variable].values)
+                s1_max = var_maxdiff[0]/(param_diffs.max_reldiff.values[0])
+            else:
+                s1_max = np.nan
+                
+            s1 = np.abs(np.nanmean([s1_min, s1_max]))
+            var_diffs[param][variable] = s1
+
+        var_df = pd.DataFrame.from_dict(var_diffs, orient='index')
+        all_var_dfs[variable] = var_df
+    return pd.concat(all_var_dfs.values(), axis=1)
+
+def get_param_variance(parameters, variable, ds, default_ind):
+    
+    default = ds.isel(ensemble=default_ind).sel(summation_var='mean')
+    
+    variances = []
+    for parameter in parameters:
+        this_par = ds.where(ds.parameter_name == parameter, drop=True).sel(summation_var='mean')
+        if (this_par.type == 'min').any():
+            min_par = this_par.where(this_par.type == 'min', drop=True)
+        else:
+            min_par = default
+        if (this_par.type == 'max').any():
+            max_par = this_par.where(this_par.type == 'max', drop=True)
+        else:
+            max_par = default
+    
+        variance = (default[variable].values - min_par[variable].values)**2 + (max_par[variable].values - default[variable].values)**2
+        variances.append(variance[0])
+    
+    return pd.DataFrame({'parameter_name': parameters, 'variance': variances})
+
+def get_cumulative_variance(df, parameters, param_chunks):
+
+    df = df.set_index('parameter_name').to_xarray()
+    chunks = xr.DataArray(param_chunks + param_chunks*np.floor(np.arange(len(parameters))/param_chunks),
+                          dims='parameter_name', name='nparams')
+    return df['variance'].sortby(df['variance'], ascending=False).groupby(chunks).sum().cumsum(dim='nparams')/df['variance'].sum()
+
+def get_categorical_cumulative_variance(df, param_info, parameters, param_chunks):
+    
+    categories = pd.merge(df, param_info.drop_duplicates(), on='parameter_name', how='inner')
+    
+    categories = categories.sort_values(by='variance', ascending=False)
+    categories['chunk'] = param_chunks + param_chunks*np.floor(np.arange(len(parameters))/param_chunks)
+    
+    counts = categories.groupby(['chunk', 'category']).size().reset_index(name='n')
+    counts['freq'] = counts.groupby('chunk')['n'].transform(lambda x: x / x.sum())
+    
+    variance = get_cumulative_variance(df, parameters, param_chunks).to_dataset().to_pandas()
+
+    grouped = pd.merge(variance, counts, on='chunk', how='inner')
+    grouped['cum_sum_cat'] = grouped.variance*grouped.freq
+    subset = grouped[grouped.chunk <= 50]
+    
+    return subset.pivot(index='chunk', columns='category', values='cum_sum_cat').fillna(0)

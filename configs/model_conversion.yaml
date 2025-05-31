@@ -158,4 +158,4 @@ Precip:
   global_units: cm
   cmap: BrBG
   diverging_cmap: False
-  long_name: 2-m relative humidity
+  long_name: precipitation
