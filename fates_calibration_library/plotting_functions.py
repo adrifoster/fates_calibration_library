@@ -1305,3 +1305,39 @@ def plot_params(default_param_data, param_ds, parameter):
             ax.set_title(pfts[idx])
             ax.axhline(y=sub_def, color='r', linestyle='--')
     plt.suptitle(parameter)
+    
+def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, units):
+    
+    both = pd.concat([ds1, ds2])
+    
+    ds1_mean_val = ds1[variable].mean()
+    ds1_yerr = np.array([ds1_mean_val - ds1[variable].min(),
+                        ds1[variable].max() - ds1_mean_val])
+                        
+    ds2_mean_val = ds2[variable].mean()
+    ds2_yerr = np.array([ds2_mean_val - ds2[variable].min(),
+                        ds2[variable].max() - ds2_mean_val])
+
+    g = sns.catplot(data=both, x="model", y=variable,
+                hue="category", kind='strip', jitter=True,
+                dodge=True, height=5, aspect=0.8, alpha=0.7,
+            palette=_CATEGORY_COLORS)
+
+    plt.errorbar(x=[ds1_name], y=ds1_mean_val,
+                yerr=[[ds1_yerr[0]], [ds1_yerr[1]]],
+                fmt='o', color='black', ecolor='black',
+                capsize=15)
+
+    plt.errorbar(x=[ds2_name], y=ds2_mean_val,yerr=[[ds2_yerr[0]], [ds2_yerr[1]]],
+                fmt='o', color='black', ecolor='black',
+                capsize=15)
+
+    handles = g._legend.legend_handles
+    labels = [text.get_text() for text in g._legend.texts]
+    g._legend.remove()
+
+    plt.legend(handles, [_CATEGORY_LABELS[label] for label in labels],
+            title='Parameter Grouping', bbox_to_anchor=(1.15, 0.7), loc='upper left',
+            borderaxespad=0.)
+    plt.xlabel(None)
+    plt.ylabel(f"{long_name} ({units})")

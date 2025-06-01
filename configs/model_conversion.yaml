@@ -8,7 +8,7 @@ ASA:
   long_name: Albedo
 
 GPP:
-  time_conversion_factor: 86400
+  time_conversion_factor: 86400.0
   area_conversion_factor: 1.0e-6
   annual_units: kgC m$^{-2}$ yr$^{-1}$
   global_units: PgC yr$^{-1}$
@@ -33,6 +33,44 @@ EFLX_LH_TOT:
   cmap: YlGnBu
   diverging_cmap: False
   long_name: Latent Heat Flux
+
+QRUNOFF:
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  annual_units: mm d$^{-1}$
+  global_units: mm d$^{-1}$
+  cmap: YlGnBu
+  diverging_cmap: False
+  long_name: total liquid runoff
+
+
+QSOIL:
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  annual_units: mm d$^{-1}$
+  global_units: mm d$^{-1}$
+  cmap: YlGnBu
+  diverging_cmap: False
+  long_name: ground evaporation
+
+QVEGE:
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  annual_units: mm d$^{-1}$
+  global_units: mm d$^{-1}$
+  cmap: YlGnBu
+  diverging_cmap: False
+  long_name: canopy evaporation
+  
+QVEGT:
+  time_conversion_factor: 86400.0
+  area_conversion_factor: null
+  annual_units: mm d$^{-1}$
+  global_units: mm d$^{-1}$
+  cmap: YlGnBu
+  diverging_cmap: False
+  long_name: canopy transpiration
+
 
 FSH:
   time_conversion_factor: null
