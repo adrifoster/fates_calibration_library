@@ -14,6 +14,7 @@ from cartopy.mpl.geocollection import GeoQuadMesh
 from matplotlib.patches import Patch
 import seaborn as sns
 from adjustText import adjust_text
+import textwrap
 
 from fates_calibration_library.analysis_functions import cyclic_month_difference
 from fates_calibration_library.analysis_functions import calculate_zonal_mean
@@ -90,6 +91,8 @@ _SUBCATEGORY_LABELS = {
         'thermal': 'Soil thermal properties',
 }
 
+def wrap_labels(labels, width=20):
+    return ['\n'.join(textwrap.wrap(label, width=width)) for label in labels]
 
 def plot_zonal_mean_diff(
     data_arrays: list[xr.DataArray],
@@ -920,11 +923,9 @@ def plot_oaat_params(param_dat: pd.DataFrame, model: str):
     pivot['y'] = pivot['subcategory_label'].map(subcategory_to_y)
     pivot = pivot.sort_values('y')
 
-    plt.figure(figsize=(10, 8))
-    sns.set_theme(style="whitegrid")
-    
+    sns.set_theme(style="whitegrid")    
     legend_elements = {}
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(10, 10))
     for _, row in pivot.iterrows():
     
         y = row['y']
@@ -935,10 +936,16 @@ def plot_oaat_params(param_dat: pd.DataFrame, model: str):
 
         if fates_val > 0:
             ax.barh(y, fates_val, color=color)
+            t = ax.text(fates_val - 1, y, str(int(fates_val)), va='center', ha='center', 
+                    fontsize=12, c='white', weight='bold')
+            t.set_bbox(dict(facecolor=color, alpha=1, edgecolor=color))
             legend_elements[category] = Patch(facecolor=color, label=category)
 
         if clm_val > 0:
             ax.barh(y, clm_val, left=fates_val, color=color, hatch='///')
+            t = ax.text(fates_val + clm_val - 1, y, str(int(clm_val)), va='center', ha='center', 
+                    fontsize=12, c='white', weight='bold')
+            t.set_bbox(dict(facecolor=color, alpha=1, edgecolor=color))
             legend_elements[category] = Patch(facecolor=color, label=category)
     
     # add clm and fates parameters
@@ -1058,18 +1065,16 @@ def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units,
     plt.tight_layout()
     
     
-def plot_top_n(ds, default, variable, ylabel, units):
+def _plot_top_n(ax, ds, default, variable, biome_label=None):
     
-    plt.figure(figsize=(10, 6))
-
-    # Loop through the rows of the sorted dataframe
+    # loop through the rows of the sorted dataframe
     for _, row in ds.iterrows():
     
         # get the color for the current category
         category_color = _CATEGORY_COLORS.get(row['category'], '#000000')
         
-        # Line connecting min and max GPP
-        plt.plot(
+        # line connecting min and max variable
+        ax.plot(
             [row['min_val'], row['max_val']],
             [row['parameter_name'], row['parameter_name']],
             color=category_color,
@@ -1077,8 +1082,8 @@ def plot_top_n(ds, default, variable, ylabel, units):
             zorder=1
         )
 
-    # Plot max GPP values as filled circles with category color
-    plt.scatter(
+    # plot max values as filled circles with category color
+    ax.scatter(
         ds['max_val'],
         ds['parameter_name'],
         c=ds['category'].map(_CATEGORY_COLORS),
@@ -1086,8 +1091,8 @@ def plot_top_n(ds, default, variable, ylabel, units):
         zorder=2
     )
     
-    # Plot min GPP values as open circles with category color
-    plt.scatter(
+    # plot min values as open circles with category color
+    ax.scatter(
         ds['min_val'],
         ds['parameter_name'],
         facecolors='none',
@@ -1096,9 +1101,45 @@ def plot_top_n(ds, default, variable, ylabel, units):
         zorder=2
     )
     
-    plt.axvline(x=default[variable].mean().values, color='k', linestyle='--', linewidth=1)
+    ax.axvline(x=default[variable].mean().values, color='k', linestyle='--', linewidth=1)
     
-    # Create custom legend handles for categories
+    ax.set_title(biome_label)
+    ax.invert_yaxis()
+    ax.grid(True, linestyle='--', alpha=0.5)
+    
+def plot_top_n(ds, default, variable, ylabel, units, xmin=None, xmax=None, by_biomes=False):
+    
+    if by_biomes:
+        
+        biomes = np.unique(ds.biome.values)
+        biomes = biomes[1:]  # don't plot ice 
+        n_biomes = len(biomes)
+        
+        # determine grid size
+        ncols = 3
+        nrows = math.ceil(n_biomes/ncols)
+        
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 5 * nrows), 
+                                 sharex=False)
+        axes = axes.flatten()
+        
+        for i, biome in enumerate(biomes):
+            
+            biome_default = default.sel(biome=biome)
+            biome_ds = ds[ds.biome == biome]
+            _plot_top_n(axes[i], biome_ds, biome_default, variable, biome)
+    
+    else:
+        
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+        #ax = fig.add_axes([0.3, 0.1, 0.6, 0.8]) 
+        _plot_top_n(ax, ds, default, variable)
+    
+    
+    if xmin is not None and xmax is not None:
+        ax.set_xlim(xmin, xmax)
+    
+    # create custom legend handles for categories
     category_handles = [
         mlines.Line2D([], [], marker='o', color='w', markerfacecolor=color, markersize=10, label=category)
         for category, color in _CATEGORY_COLORS.items()
@@ -1130,10 +1171,6 @@ def plot_top_n(ds, default, variable, ylabel, units):
     
     plt.xlabel(f'{ylabel} ({units})')
     plt.ylabel('Parameter')
-    
-    # Invert the Y-axis so the top differences appear at the top
-    plt.gca().invert_yaxis()
-    
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
 
@@ -1335,9 +1372,11 @@ def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, un
     handles = g._legend.legend_handles
     labels = [text.get_text() for text in g._legend.texts]
     g._legend.remove()
+    g.ax.figure.set_size_inches(6, 7)
 
     plt.legend(handles, [_CATEGORY_LABELS[label] for label in labels],
             title='Parameter Grouping', bbox_to_anchor=(1.15, 0.7), loc='upper left',
             borderaxespad=0.)
     plt.xlabel(None)
     plt.ylabel(f"{long_name} ({units})")
+    plt.tight_layout()

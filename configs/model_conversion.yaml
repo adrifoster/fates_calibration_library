@@ -84,8 +84,8 @@ FSH:
 EF:
   time_conversion_factor: null
   area_conversion_factor: null
-  annual_units: W m$^{-2}$
-  global_units: W m$^{-2}$
+  annual_units: 0-1
+  global_units: 0-1
   cmap: BrBG
   diverging_cmap: False
   long_name: Evaporative Fraction
@@ -94,7 +94,7 @@ SOILWATER_10CM:
   time_conversion_factor: null
   area_conversion_factor: 1.0e-6
   annual_units: kgH$_2$O m$^{-2}$
-  global_units: TtH$_2$O yr$^{-1}$
+  global_units: PgH$_2$O yr$^{-1}$
   cmap: Blues
   diverging_cmap: False
   long_name: Surface Soil Water
