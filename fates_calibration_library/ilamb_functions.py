@@ -978,6 +978,8 @@ def average_obs_across_models(
     """
 
     obs = get_model_da(obs_ds, var_name, models)
+    obs = obs.sel(year=slice(2000, 2014)).mean(dim='year')
+    obs = obs.where(obs_ds.landfrac > 0.0)
 
     obs_mean = obs.mean(dim="model").to_dataset(name=f"{var_name}")
     obs_var = obs.var(dim="model").to_dataset(name=f"{var_name}_var")

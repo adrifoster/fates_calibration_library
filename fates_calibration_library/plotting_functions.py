@@ -1341,6 +1341,11 @@ def plot_params(default_param_data, param_ds, parameter):
             ax.scatter(ens, sub, label=pfts[idx])
             ax.set_title(pfts[idx])
             ax.axhline(y=sub_def, color='r', linestyle='--')
+    else:
+        sub_def = default_param_data[parameter].values
+        fig, ax = plt.subplots(1, 1, figsize=(13, 6))
+        ax.scatter(ens, da)
+        ax.axhline(y=sub_def, color='r', linestyle='--')
     plt.suptitle(parameter)
     
 def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, units):

@@ -1,0 +1,77 @@
+#!/bin/bash
+
+#==============================================================================
+#
+# Script Name: clone_case
+# Description: This script clones a base case submits the run.
+# 
+# Usage: ./run_ensemble.sh <config_file>
+#
+# Arguments:
+#   <config_file>     Path to the configuration file containing environment variables.
+#
+#
+# Requirements:
+#   - Must have the necessary CTSM environment set up.
+#   - Requires a valid configuration file.
+#   - The configuration file must define necessary environment variables.
+#   - The base case (`BASE_CASE`) must be a valid CTSM case.
+#
+# Environment Variables (loaded from config file):
+#   CASE_DIR         Directory where cases will be created.
+#   BASE_CASE        Path to the base CTSM case to clone.
+#   SRC_DIR          Directory containing cime scripts.
+#   OUT_DIR          Output directory for the cases.
+#   STOP_N           Number of years for each submission of the simulation.
+#   RESUBMIT         Number of resubmissions.
+#   CHARGENUM        Project charge number.
+#
+# Example:
+#   ./run_ensemble config_file.cfg
+#
+# Author: Adrianna Foster
+# Date: 2025-06-19
+# Version: 1.0
+#
+#==============================================================================
+
+if [ $# -lt 1 ]
+then
+  echo "ERROR: please specify config file"
+  exit 1
+fi
+config_file="$1"
+
+# source utility functions
+source "$(dirname "$0")/common_utils"
+
+# read and export config variables
+read_config "$config_file"
+
+# ensure required environment variables are set
+base_vars=(
+  CASE_DIR BASE_CASE SRC_DIR STOP_N RESUBMIT CHARGENUM 
+  )
+check_required_vars "${base_vars[@]}"
+
+# get the basename of the base case
+BASE_CASE_NAME=$(basename "$BASE_CASE")
+
+# create a case name
+case_name="${CASE_DIR}/${BASE_CASE_NAME}_${tag}"
+echo ${case_name}
+
+# change to scripts directory and check if successful
+cd "${SRC_DIR}/cime/scripts" || { echo "ERROR: Failed to change directory to ${SRC_DIR}/cime/scripts"; exit 1; }
+./create_clone --case "${case_name}" --clone "${BASE_CASE}" --keepexe
+
+# change to case directory - check if successful
+cd "${case_name}" || { echo "ERROR: Failed to change directory to ${case_name}"; exit 1; }
+
+# update XML settings
+./xmlchange STOP_N="${STOP_N}"
+./xmlchange RESUBMIT="${RESUBMIT}"
+./case.setup
+./xmlchange PROJECT="${CHARGENUM}"
+
+# ./case.submit -a "-l place=group=rack"

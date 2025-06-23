@@ -172,9 +172,9 @@ def check_ensembles_run(key_df: pd.DataFrame, keys_finished: list[str]) -> list[
 def post_process_ds(
     hist_dir: str,
     data_vars: list[str],
-    whittaker_ds: xr.Dataset,
     years: list[int],
-    run_dict: dict = None,
+    run_dict: dict={},
+    whittaker_ds: xr.Dataset=None,
 ) -> xr.Dataset:
     """Post-processes a CLM dataset
 
@@ -194,9 +194,7 @@ def post_process_ds(
         xr.Dataset: output dataset
     """
 
-    # assign default values if run_dict is None
-    if run_dict is None:
-        run_dict = {}
+    # assign default values if not there
     sparse = run_dict.get("sparse", True)
     filter_nyears = run_dict.get("filter_nyears", None)
 
@@ -208,8 +206,8 @@ def post_process_ds(
         run_dict,
     )
 
-    # add Whittaker biomes if we are doing a sparse run
-    if sparse:
+    # add Whittaker biomes if we are doing a "sparse" run
+    if sparse and whittaker_ds is not None:
         ds["biome"] = whittaker_ds.biome
         ds["biome_name"] = whittaker_ds.biome_name
 
@@ -270,7 +268,7 @@ def area_mean_from_sparse(
 
 
 def post_process_ensemble(
-    run_dict: dict, data_vars: list[str], biome: xr.DataArray
+    run_dict: dict, data_vars: list[str], biome: xr.DataArray=None
 ) -> list[str]:
     """Create single history files for each set of history files in an ensemble.
 
@@ -286,7 +284,7 @@ def post_process_ensemble(
             filter_nyears (int, optional): How many years to filter at end of simulation.
                 Defaults to None.
         data_vars (list[str]): list of variables to read in
-        biome (xr.DataArray): Whittaker biome dataset
+        biome (xr.DataArray, optional): Whittaker biome dataset. Defaults to None.
 
     Returns:
         list[str]: list of ensemble keys successfully post-processed and written out
@@ -313,9 +311,9 @@ def post_process_ensemble(
         ds_out = post_process_ds(
             os.path.join(run_dict["top_dir"], hist_dir, "lnd", "hist"),
             data_vars,
-            biome,
             run_dict["years"],
             run_dict=run_dict,
+            whittaker_ds=biome,
         )
         # write to file
         if ds_out is not None:
@@ -335,9 +333,9 @@ def post_process_ensemble(
         ds_default = post_process_ds(
             os.path.join(run_dict["default_dir"], "lnd", "hist"),
             data_vars,
-            biome,
             run_dict["years"],
             run_dict=run_dict,
+            whittaker_ds=biome
         )
         ds_default["ensemble"] = 0
         ds_default.to_netcdf(out_file)
@@ -359,10 +357,9 @@ def compile_global_ensemble(
         files, combine="nested", concat_dim=["ensemble"], parallel=True
     )
     ensemble_ds = ensemble_ds.chunk({"gridcell": 20, "ensemble": 20, "time": 20})
+    
 
-    biome = ensemble_ds.isel(ensemble=0).biome.drop_vars("ensemble")
-
-    # calculate annual and monthly means
+    # calculate annual means
     annual_means = apply_to_vars(
         ensemble_ds,
         out_vars,
@@ -384,6 +381,8 @@ def compile_global_ensemble(
     annual_means["ASA"] = fsr/fsds
     annual_means["EF"] = le/(sh + le)
     
+    
+    # calculate monthly means
     monthly_means = apply_to_vars(
         ensemble_ds,
         out_vars,
@@ -393,6 +392,8 @@ def compile_global_ensemble(
             var: var_dict[var]["time_conversion_factor"] for var in out_vars
         },
     )
+    
+    biome = ensemble_ds.isel(ensemble=0).biome.drop_vars("ensemble")
 
     # remap annual means to whole globe
     annual_maps_filename = os.path.join(
@@ -483,7 +484,83 @@ def compile_global_ensemble(
         biome_area_means_out.to_netcdf(biome_area_means_filename)
 
 
+def compile_pft_ensemble(
+    run_dict, out_vars, var_dict
+):
+
+    # read in ensemble
+    files = sorted(
+        [
+            os.path.join(run_dict["postp_dir"], f)
+            for f in os.listdir(run_dict["postp_dir"])
+        ]
+    )
+    ensemble_ds = xr.open_mfdataset(
+        files, combine="nested", concat_dim=["ensemble"], parallel=True
+    )
+    ensemble_ds = ensemble_ds.chunk({"gridcell": 20, "ensemble": 20, "time": 20})
+    
+    annual_means_filename = os.path.join(
+        run_dict["out_dir"], f'{run_dict["ensemble_name"]}_annual_means.nc'
+    )
+    if os.path.isfile(annual_means_filename) and not run_dict.get("clobber", False):
+        print(f"File {annual_means_filename} exists, skipping")
+    else:
+
+        # calculate annual means
+        annual_means = apply_to_vars(
+            ensemble_ds,
+            out_vars,
+            func=calculate_annual_mean,
+            add_sparse=True,
+            conversion_factor={
+                var: var_dict[var]["time_conversion_factor"] for var in out_vars
+            },
+            new_units={var: var_dict[var]["annual_units"] for var in out_vars},
+        )
+        
+        sh = annual_means['FSH']
+        le = annual_means['EFLX_LH_TOT']
+        sh = sh.where((sh > 0.0) & (le > 0.0) & ((le + sh) > 0.0))
+        le = le.where((sh > 0.0) & (le > 0.0) & ((le + sh) > 0.0))
+        fsr = annual_means["FSR"].where(annual_means["FSDS"] > 0.0)
+        fsds = annual_means["FSDS"].where(annual_means["FSDS"] > 0.0)
+        
+        annual_means["ASA"] = fsr/fsds
+        annual_means["EF"] = le/(sh + le)
+        
+        # average by year
+        mean_dat = []
+        for var in out_vars:
+            mean_dat.append(annual_means[var].mean(dim='year'))
+        mean_dat.append(annual_means['grid1d_lat'])
+        mean_dat.append(annual_means['grid1d_lon'])
+        annual_means_mean = xr.merge(mean_dat)
+        
+        annual_means_mean.to_netcdf(annual_means_filename)
+        
+    monthly_means_filename = os.path.join(
+        run_dict["out_dir"], f'{run_dict["ensemble_name"]}_monthly_means.nc'
+    )
+    if os.path.isfile(monthly_means_filename) and not run_dict.get("clobber", False):
+        print(f"File {monthly_means_filename} exists, skipping")
+    else:
+    
+        # calculate monthly means
+        monthly_means = apply_to_vars(
+            ensemble_ds,
+            out_vars,
+            func=calculate_monthly_mean,
+            add_sparse=True,
+            conversion_factor={
+                var: var_dict[var]["time_conversion_factor"] for var in out_vars
+            },
+        )
+        monthly_means.to_netcdf(monthly_means_filename)
+    
+
 def global_from_sparse(
+        
     sparse_grid: xr.Dataset, da: xr.DataArray, ds: xr.Dataset, ensemble: bool = False
 ) -> xr.DataArray:
     """Creates a global map from an input sparse grid in a "paint by numbers" method
@@ -659,3 +736,83 @@ def get_sparse_area_means(
         )
 
     return xr.merge(ds_list)
+
+def get_pft_grids(land_mask_file, mesh_file, pft):
+        
+    mesh = xr.open_dataset(mesh_file)
+    mesh = mesh.where(mesh.elementMask == 1, drop=True)
+    
+    centerCoords = mesh.centerCoords.values
+    grids = mesh.elementCount.values
+
+    mesh_lats = [coord[1] for coord in centerCoords]
+    mesh_lons = [coord[0] for coord in centerCoords]
+
+    land_mask = xr.open_dataset(land_mask_file)
+
+    land_mask_pft = land_mask.where(land_mask.pft == pft)
+    all_lats = land_mask_pft.lat.values
+    all_lons = land_mask_pft.lon.values
+    indices = np.argwhere(np.array(~np.isnan(land_mask_pft['landmask'])))
+    
+    nc_lats = []
+    nc_lons = []
+    for coord in indices:
+        nc_lats.append(all_lats[coord[0]])
+        nc_lons.append(all_lons[coord[1]])
+
+    pft_grids = []
+    for i in range(len(nc_lats)):
+        pft_grids.append(grids[np.argwhere((mesh_lats == nc_lats[i])*(mesh_lons == nc_lons[i]))[0][0]])
+
+    return pft_grids
+
+def attach_land_area(ensemble, pft_grids, ds0_file):
+
+    ds = xr.open_dataset(ds0_file)
+    ds0 = ds.isel(time=0)
+
+    land_area = (ds0.landfrac*ds0.area*1000000.0).values
+    lats = ds0.lat
+    lons = ds0.lon
+
+    default = ensemble.isel(ensemble=0)
+    grid_lats = default.grid1d_lat
+    grid_lons = default.grid1d_lon
+
+    # extract land area at the chosen gridcells
+    area = np.zeros(len(grid_lats))
+    for i in range(len(grid_lats)):
+        nearest_index_lat = np.abs(lats - grid_lats[i]).argmin()
+        nearest_index_lon = np.abs(lons - grid_lons[i]).argmin()
+        
+        # grab data at correct lat/lon
+        area[i] = land_area[nearest_index_lat, nearest_index_lon]
+
+    ensemble['land_area'] = xr.DataArray(area, coords={"gridcell": pft_grids})
+
+    return ensemble
+
+def get_pft_ensemble(ensemble_file, pft_grids, ds0_file):
+    
+    ensemble = xr.open_dataset(ensemble_file)
+    
+    ensemble_pft = ensemble.where(ensemble.gridcell.isin(pft_grids), drop=True)
+
+    ensemble_pft = attach_land_area(ensemble_pft, pft_grids, ds0_file)
+
+    return ensemble_pft
+
+def weighted_mean(ds: xr.Dataset, var: str):
+    """Takes the land area-weighted mean of a variable in a dataset
+       Assumes dataset has a 'land_area' variable
+
+    Args:
+        ds (xr.Dataset): dataset
+        var (str): variable to take average
+
+    Returns:
+        xr.DataArray: weighted mean
+    """
+    
+    return ((ds[var]*ds.land_area).sum(dim='gridcell'))/ds.land_area.sum(dim='gridcell')

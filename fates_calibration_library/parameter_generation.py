@@ -547,6 +547,8 @@ def create_lh_param_ensemble(
             for pft, pft_dat in info['data'].items():
                 param_dict[pft] = pft_dat.sample(n=num_samples)
             sample_dict[par] = param_dict
+    else:
+        sample_dict = None
 
     # loop through each row of latin hypercube and create a parameter file
     for i, sample in enumerate(lh_sample):
@@ -596,19 +598,19 @@ def create_lh_param_ensemble(
                 by_pft
             )
 
-    #     # output to file
-    #     ds.to_netcdf(os.path.join(out_dir, f"{param_prefix}_{generate_suffix(i+1)}.nc"))
+        # output to file
+        ds.to_netcdf(os.path.join(out_dir, f"{param_prefix}_{generate_suffix(i+1)}.nc"))
 
-    # # write out the key and list of files
-    # lh_key = pd.DataFrame(lh_sample)
-    # lh_key.columns = params
-    # lh_key["ensemble"] = [
-    #     f"{param_prefix}_{generate_suffix(ens)}"
-    #     for ens in np.arange(1, num_samples + 1)
-    # ]
-    # lh_key.to_csv(os.path.join(out_dir, f"{param_prefix.lower()}_key.csv"))
+    # write out the key and list of files
+    lh_key = pd.DataFrame(lh_sample)
+    lh_key.columns = params
+    lh_key["ensemble"] = [
+        f"{param_prefix}_{generate_suffix(ens)}"
+        for ens in np.arange(1, num_samples + 1)
+    ]
+    lh_key.to_csv(os.path.join(out_dir, f"{param_prefix.lower()}_key.csv"))
 
-    # write_ensemble_list(param_prefix, lh_key.ensemble.values, out_dir)
+    write_ensemble_list(param_prefix, lh_key.ensemble.values, out_dir)
 
 
 def get_percentage_change(param_change: str) -> float:
