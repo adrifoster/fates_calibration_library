@@ -622,3 +622,74 @@ def get_obs_mean_and_sd(df, variable):
     return weighted_var_mean, weighted_sd_mean
 
     
+def implausibility_metric(pred, obs, pred_var, obs_var):
+
+    top = np.abs(pred - obs)
+    bottom = np.sqrt(pred_var + obs_var)
+
+    imp = top/bottom
+
+    return imp
+
+def calculate_implaus_sum(df, col_list):
+    
+    implausiblity_sum = df[col_list].sum(axis=1)
+    
+    return implausiblity_sum
+
+def subset_sample(sample_dat, col_list, implaus_tol):
+    
+    for col in col_list:
+        sample_dat = sample_dat.where(sample_dat[col] < implaus_tol)
+    
+    sample_sub = sample_dat.dropna()
+    
+    return sample_sub
+
+
+def plot_parameter_hists(sample, min_max_pars):
+    
+    pars = [par for par in sample.columns if par != 'wave']
+    
+    plt.figure(figsize=[18, 16])
+    for i, par in enumerate(pars):
+        
+        par_min_max = min_max_pars[min_max_pars.parameter == par]
+        minpar = float(par_min_max[par_min_max.type == 'min']['val'].values[0])
+        maxpar = float(par_min_max[par_min_max.type == 'max']['val'].values[0])
+        defaultpar = float(par_min_max['default'].values[0])
+        p = (defaultpar - minpar)/(maxpar - minpar)
+        
+        ax = plt.subplot(7, 5, i + 1)
+        ax.hist(sample[par])
+        ax.axvline(x=p, color='r', linestyle='-')
+        ax.set_xlabel(par)
+        ax.set_xlim(0, 1)
+    plt.tight_layout()
+    
+def find_sensitive_parameters(sens_df, vars, sens_tol):
+    
+    sub_dat = sens_df[sens_df['var'].isin(vars)]
+    sub_dat = sub_dat.where(sub_dat.S1 > sens_tol)
+    sub_dat = sub_dat.dropna()
+    
+    sensitive_pars = sorted(np.unique(sub_dat.names))
+
+    return sensitive_pars
+
+def get_param_samples(sample_dir):
+    
+    files = sorted([os.path.join(sample_dir, file) for file in os.listdir(sample_dir) if file.endswith(".csv")])
+    sample_dfs = []
+    for file in files:
+        df = pd.read_csv(file, index_col=[0])
+        sample_dfs.append(df)
+    sample_df = pd.concat(sample_dfs)
+    sample_df = sample_df.drop(columns=['wave'])
+
+    return sample_df
+
+def find_best_parameter_sets(sample):
+    best_sample_index = sample[['implaus_sum']].idxmin()
+    best_sample = sample.loc[best_sample_index, :]
+    return best_sample

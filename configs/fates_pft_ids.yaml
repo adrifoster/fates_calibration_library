@@ -1,0 +1,15 @@
+broadleaf_evergreen_tropical_tree: BETT
+needleleaf_evergreen_extratrop_tree: NEET
+needleleaf_colddecid_extratrop_tree: NCET
+broadleaf_evergreen_extratrop_tree: BEET
+broadleaf_hydrodecid_tropical_tree: BDTT
+broadleaf_colddecid_extratrop_tree: BDET
+broadleaf_evergreen_extratrop_shrub: BEES
+broadleaf_colddecid_extratrop_shrub: BCES
+broadleaf_evergreen_arctic_shrub: BEAS
+broadleaf_colddecid_arctic_shrub: BCAS
+arctic_c3_grass: AC3G
+cool_c3_grass: C3G
+c4_grass: C4G
+c3_crop: C3C
+c3_irrigated: C3CI
