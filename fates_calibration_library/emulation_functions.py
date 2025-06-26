@@ -8,9 +8,7 @@ from esem.emulator import Emulator
 from esem.utils import get_random_params
 import pickle
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from SALib.sample import fast_sampler
-from SALib.analyze import fast
+
 from fates_calibration.FATES_calibration_constants import OBS_MODEL_VARS, VAR_UNITS
 
 def load_emulator(pickle_file, y_train, X_train):
@@ -127,126 +125,6 @@ def load_all_emulators(pft_id, emulator_dir, vars):
         emulators[var] = load_emulator(pickle_file, y_train_var, X_train_var)
         
     return emulators
-
-
-def create_fast_sample(param_names, update_vars=None):
-    
-    # create a fast sample for fourier sensitivity
-    problem = {
-        'names': param_names,
-        'num_vars': len(param_names),
-        'bounds': [[0, 1]],
-    }
-    
-    sample = fast_sampler.sample(problem, 1000, M=4, seed=None)
-    if update_vars is not None:
-        sample = update_sample(sample, update_vars, param_names)
-    
-    return problem, sample
-
-def fourier_sensitivity(emulator, problem, sample, update_vars=None):
-
-    # fourier amplitude sensitivity test w/emulator
-    Y, _ = emulator.predict(sample)
-
-    FAST = fast.analyze(problem, Y, M=4, num_resamples=100, conf_level=0.95,
-                        print_to_console=False, seed=None)
-    sens = pd.DataFrame.from_dict(FAST)
-    sens.index = sens.names
-    df_sens = sens.sort_values(by=['S1'], ascending=False)
-
-    return df_sens
-  
-def update_sample(sample, update_vars, param_names):
-    pars_to_update = update_vars.columns
-    for i in range(len(sample)):
-        for par in pars_to_update:
-            j = np.where(param_names == par)
-            val = update_vars[par].values[0]
-            sample[i][j] = val
-    
-    return sample
-
-def plot_fourier_sensitivity(sens_df, title):
-
-    plt.figure(num=None, figsize=(12, 6), dpi=100, facecolor='w', edgecolor='k')
-    plt.rcParams.update({'font.size': 12})
-
-    ax = plt.subplot(1, 1, 1)
-    ax.bar(sens_df.names, sens_df['ST'], color='lightgrey', label='interactions')
-    ax.bar(sens_df.names, sens_df['S1'], color='darkolivegreen', label='main effects')
-    ax.tick_params(axis='x', labelrotation=90)
-    plt.legend(loc='upper right')
-    plt.ylabel('Proportion of total emulated variance')
-    plt.title(title)
-    plt.tight_layout()
-    
-def plot_oaat_sens(param_names, emulator):
-
-    num_params = len(param_names)
-
-    # hold all parameters at median value 
-    n = 50
-    unif = pd.concat([pd.DataFrame(np.tile(0.5, n))]*num_params, axis=1)
-    unif.columns = param_names
-    
-    s = np.linspace(0, 1, n)
-    param = np.array([])
-    oaats = np.array([])
-    vars = np.array([])
-    samps = np.array([])
-    
-    sample = unif
-    
-    plt.figure(figsize=[18, 16])
-    for i, p in enumerate(param_names):
-        
-        # save old value and update to be 0-1
-        save = sample[p]
-        sample[p] = s
-        
-        # oaat prediction
-        oaat, v = emulator.predict(sample.values)
-        ax = plt.subplot(7, 5, i + 1)
-        ax.fill_between(s, oaat - 2.0*v**0.5, oaat + 2.0*v**0.5, color='peru',
-                        alpha=0.4)  # shade two standard deviations
-        ax.plot(s, oaat, c='k')
-        ax.set_xlabel(p)
-
-        oaats = np.append(oaats, oaat)
-        vars = np.append(vars, v)
-        param = np.append(param, np.repeat(p, n))
-        samps = np.append(samps, s)
-        
-        # set column back to before
-        sample[p] = save 
-
-    plt.tight_layout()
-    df = pd.DataFrame({'sample': samps,
-      'predict': oaats,
-      'variance': vars,
-      'parameter': param})
-    dataf = pd.DataFrame(df)
-    return dataf
-
-def plot_emulated_sample(pred_sampled, obs_mean, obs_var, pft_id, var, units):
-    
-    plt.figure(figsize=(7, 5))
-    ax = plt.subplot(111)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.get_xaxis().tick_bottom()
-    ax.get_yaxis().tick_left()
-    plt.xticks(fontsize=11)
-
-    my_hist, _ = np.histogram(pred_sampled, bins=40)
-    maxv = my_hist.max()
-    plt.xlabel(f"Emulated {pft_id} Annual {var} ({units})", fontsize=12)
-    plt.ylabel("Count", fontsize=12)
-    plt.hist(pred_sampled, fc="darkgray", bins=40)
-    ax.add_patch(Rectangle((obs_mean - np.sqrt(obs_var), 0), 2*np.sqrt(obs_var), maxv,
-                        facecolor='red', alpha=0.4))
-    ax.axvline(x=obs_mean, ymin=0.0, ymax=maxv, color='r')
     
 def calculate_implaus_sum(df, col_list):
     

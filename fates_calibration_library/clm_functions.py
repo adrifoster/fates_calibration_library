@@ -767,12 +767,13 @@ def get_pft_grids(land_mask_file, mesh_file, pft):
 
     return pft_grids
 
-def attach_land_area(ensemble, pft_grids, ds0_file):
+def attach_land_area(ensemble, pft_grids, target_grid_file):
 
-    ds = xr.open_dataset(ds0_file)
-    ds0 = ds.isel(time=0)
+    ds_grid = xr.open_dataset(target_grid_file)
+    ds0 = ds_grid.isel(time=0)
 
-    land_area = (ds0.landfrac*ds0.area*1000000.0).values
+    land_area = (ds0.landfrac*ds0.area).values
+    land_frac = ds0.landfrac.values
     lats = ds0.lat
     lons = ds0.lon
 
@@ -781,6 +782,7 @@ def attach_land_area(ensemble, pft_grids, ds0_file):
     grid_lons = default.grid1d_lon
 
     # extract land area at the chosen gridcells
+    frac = np.zeros(len(grid_lats))
     area = np.zeros(len(grid_lats))
     for i in range(len(grid_lats)):
         nearest_index_lat = np.abs(lats - grid_lats[i]).argmin()
@@ -788,18 +790,23 @@ def attach_land_area(ensemble, pft_grids, ds0_file):
         
         # grab data at correct lat/lon
         area[i] = land_area[nearest_index_lat, nearest_index_lon]
+        frac[i] = land_frac[nearest_index_lat, nearest_index_lon]
 
     ensemble['land_area'] = xr.DataArray(area, coords={"gridcell": pft_grids})
+    ensemble['land_area'].attrs = {'units': ds0.area.attrs['units']}
+    
+    ensemble['land_frac'] = xr.DataArray(frac, coords={"gridcell": pft_grids})
+    ensemble['land_frac'].attrs = {'units': '0-1'}
 
     return ensemble
 
-def get_pft_ensemble(ensemble_file, pft_grids, ds0_file):
+def get_pft_ensemble(ensemble_file, pft_grids, target_grid_file):
     
     ensemble = xr.open_dataset(ensemble_file)
     
     ensemble_pft = ensemble.where(ensemble.gridcell.isin(pft_grids), drop=True)
 
-    ensemble_pft = attach_land_area(ensemble_pft, pft_grids, ds0_file)
+    ensemble_pft = attach_land_area(ensemble_pft, pft_grids, target_grid_file)
 
     return ensemble_pft
 
@@ -815,4 +822,5 @@ def weighted_mean(ds: xr.Dataset, var: str):
         xr.DataArray: weighted mean
     """
     
-    return ((ds[var]*ds.land_area).sum(dim='gridcell'))/ds.land_area.sum(dim='gridcell')
+    corrected_var = ds[var]*ds.land_frac
+    return ((corrected_var*ds.land_area).sum(dim='gridcell'))/ds.land_area.sum(dim='gridcell')
