@@ -224,7 +224,7 @@ def get_biome_palette() -> tuple[dict[float, str], str]:
         "#A5C790",
         "#C1E1DD",
     ]
-
+    
     palette = {}
     for i in range(len(colors)):
         palette[float(i)] = colors[i]

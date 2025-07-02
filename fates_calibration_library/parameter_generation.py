@@ -250,7 +250,7 @@ def create_oaat_param_ensemble(
 
 def get_lh_values(
     lh_value: float, param_dat: dict, parameter: str, default_value: np.ndarray,
-    by_pft: bool=False, pfts: list[int] = None,
+    by_pft: bool=False, pfts: list[int] = None, root_value=None,
 ) -> np.ndarray:
     """Gets values for a parameter based on an input latin hypercube value (0-1), appropriately
     scaled between min and max parameter values
@@ -280,11 +280,27 @@ def get_lh_values(
     max_value = get_param_value(
         change_str_max, default_value, param_dat, parameter, "param_max"
     )
-    
     if 'fates_pft' in get_param_dims(main_param, parameter) and by_pft:
+        if isinstance(min_value, float):
+            min_val_pft = np.full_like(root_value, min_value)
+            max_val_pft = np.full_like(root_value, max_value)
+            default_val_pft = np.full_like(root_value, default_value)
+        else:
+            min_val_pft = min_value
+            max_val_pft = max_value
+            default_val_pft = default_value
+            
+        if 'fates_leafage_class' in get_param_dims(main_param, parameter):
+            min_val_pft = min_val_pft.flatten()
+            max_val_pft = max_val_pft.flatten()
+            default_val_pft = default_val_pft.flatten()
+        if 'fates_plant_organs' in get_param_dims(main_param, parameter):
+            min_val_pft = min_val_pft.flatten()
+            max_val_pft = max_val_pft.flatten()
+            default_val_pft = default_val_pft.flatten()
         for i, pft in enumerate(pfts):
-            param_value = unnormalize(lh_value[i], min_value[pft-1], max_value[pft-1])
-            default_value[pft-1] = param_value
+            param_value = unnormalize(lh_value[i], min_val_pft[pft-1], max_val_pft[pft-1])
+            default_val_pft[pft-1] = param_value
         return default_value
     else:
 
@@ -300,6 +316,8 @@ def get_root_values(
     default_param_data: xr.Dataset,
     sample: np.ndarray,
     param_dat: dict,
+    by_pft: bool=False,
+    pfts: list[int]=None,
 ) -> np.ndarray:
     """Gets the root values associated with a parameter that should scale off of another parameter
 
@@ -316,8 +334,13 @@ def get_root_values(
 
     if root_param in params:
         default_root = default_param_data[root_param].values
-        root_loc = np.where(params == root_param)
-        return get_lh_values(sample[root_loc], param_dat, root_param, default_root)
+        if by_pft:
+            return get_lh_values(sample[root_param], param_dat, root_param, default_root,
+                             by_pft, pfts)
+        else: 
+            root_loc = np.where(params == root_param)
+            return get_lh_values(sample[root_loc], param_dat, root_param, default_root,
+                                by_pft, pfts)
 
     return default_param_data[root_param].values
 
@@ -360,7 +383,7 @@ def set_lh_param_value(
     parameter: str,
     keep_pfts: list[int],
     param_dat: dict,
-    i: int,
+    sample_i: int,
     jags_dict: dict=None,
     sample_dict: dict=None,
     by_pft: bool=False,
@@ -416,12 +439,14 @@ def set_lh_param_value(
             default_param_data,
             sample,
             param_dat,
+            by_pft,
+            pfts
         )
 
         # get the change value
         delta_value = get_lh_values(
             value, param_dat, parameter, PARAM_INFO[parameter]["default_value"],
-            by_pft, pfts
+            by_pft, pfts, root_value
         )
 
         # actual value is root + delta
@@ -438,7 +463,7 @@ def set_lh_param_value(
     elif param_type == 'jags':
         
         param_dict = sample_dict[parameter]
-        param_value = get_sample_values(default_value, i, param_dict, jags_dict, parameter, 
+        param_value = get_sample_values(default_value, sample_i, param_dict, jags_dict, parameter, 
                                        actual_param_name)
             
 
@@ -551,7 +576,7 @@ def create_lh_param_ensemble(
         sample_dict = None
 
     # loop through each row of latin hypercube and create a parameter file
-    for i, sample in enumerate(lh_sample):
+    for i_sample, sample in enumerate(lh_sample):
 
         # new parameter file
         ds = default_param_data.copy(deep=False)
@@ -592,10 +617,11 @@ def create_lh_param_ensemble(
                 params[j],
                 keep_pfts,
                 param_dat,
-                i,
+                i_sample,
                 jags_dict,
                 sample_dict,
-                by_pft
+                by_pft,
+                pfts
             )
 
         # output to file
@@ -603,7 +629,17 @@ def create_lh_param_ensemble(
 
     # write out the key and list of files
     lh_key = pd.DataFrame(lh_sample)
-    lh_key.columns = params
+    if by_pft:
+        columns = []
+        for param in params:
+            if param in pft_params:
+                for pft in pfts:
+                    columns.append(f"{param}_{pft}")
+            else:
+                columns.append(param)
+    else:
+        columns = params
+    lh_key.columns = columns
     lh_key["ensemble"] = [
         f"{param_prefix}_{generate_suffix(ens)}"
         for ens in np.arange(1, num_samples + 1)

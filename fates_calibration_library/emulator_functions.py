@@ -3,21 +3,18 @@
 import os
 import json
 import gpflow
-import pickle
-from typing import List, Dict, Callable, Tuple
 import xarray as xr
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
-import tensorflow_probability as tfp
 from sklearn.metrics import root_mean_squared_error, r2_score
 from SALib.sample import fast_sampler
 from SALib.analyze import fast
 from SALib.sample import saltelli
 from SALib.analyze import sobol
 from matplotlib.patches import Rectangle
-
+from scipy.optimize import minimize
 from fates_calibration_library.TFClass import TFEmulator
 
 def create_sample(param_names, problem, update_vars=None, sample_type='Sobol'):
@@ -48,7 +45,7 @@ def sensitivity_analysis(emulator, param_names, update_vars=None, sample_type='S
     sample = create_sample(param_names, problem, update_vars, sample_type)
     
     # fourier amplitude sensitivity test w/emulator
-    Y_emulated, _ = emulator.predict_y(sample)
+    Y_emulated, _ = emulator(sample)
     
     if sample_type == 'Sobol':
         results = sobol.analyze(problem, Y_emulated.numpy().flatten(), 
@@ -108,7 +105,7 @@ def plot_oaat_sens(param_names, emulator, default_vals):
         default_val = default_vals[p].values
         
         # oaat prediction
-        oaat, v = emulator.predict_y(sample.values)
+        oaat, v = emulator(sample.values)
         oaat = oaat.numpy().flatten()
         v = v.numpy().flatten()
         ax = plt.subplot(7, 5, i + 1)
@@ -134,7 +131,8 @@ def plot_oaat_sens(param_names, emulator, default_vals):
     dataf = pd.DataFrame(df)
     return dataf
 
-def plot_emulated_sample(pred_sampled, obs_mean, obs_sd, pft_id, var, units):
+def plot_emulated_sample(pred_sampled, obs_mean, obs_sd, pft_id, var, units,
+                         ensemble_vals=None, label_1='Emulated', label_2='FATES'):
     
     plt.figure(figsize=(7, 5))
     ax = plt.subplot(111)
@@ -145,13 +143,54 @@ def plot_emulated_sample(pred_sampled, obs_mean, obs_sd, pft_id, var, units):
     plt.xticks(fontsize=11)
 
     my_hist, _ = np.histogram(pred_sampled, bins=40)
-    maxv = my_hist.max()
+    
+    plt.hist(pred_sampled, fc="darkgray", bins=40, label=label_1, alpha=0.75)
+    if ensemble_vals is not None:
+        plt.hist(ensemble_vals, fc="dodgerblue", bins=40, label=label_2, alpha=0.5)
+        
+    maxv = max(my_hist.max(), np.histogram(ensemble_vals, bins=40)[0].max() if ensemble_vals is not None else 0)
+    
+    patch = Rectangle((obs_mean - obs_sd, 0), 2*obs_sd, maxv,
+                        facecolor='red', alpha=0.4, label="Observed ± SD")
+    ax.add_patch(patch)
+    ax.axvline(x=obs_mean, ymin=0.0, ymax=maxv, color='r', label="Observed Mean")
+    
     plt.xlabel(f"Emulated {pft_id} Annual {var} ({units})", fontsize=12)
     plt.ylabel("Count", fontsize=12)
-    plt.hist(pred_sampled, fc="darkgray", bins=40)
-    ax.add_patch(Rectangle((obs_mean - obs_sd, 0), 2*obs_sd, maxv,
-                        facecolor='red', alpha=0.4))
-    ax.axvline(x=obs_mean, ymin=0.0, ymax=maxv, color='r')
+    
+    if ensemble_vals is not None:
+        plt.legend()
+        
+    plt.tight_layout()
+    
+def get_proportion_implausible(implaus, tol=3.0):
+    return len(implaus[implaus <= tol])/len(implaus)*100.0
+
+def plot_implausibility_histogram(implaus, tol=3.0):
+    plt.figure(figsize=(7, 5))
+    ax = plt.subplot(111)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.get_xaxis().tick_bottom()
+    ax.get_yaxis().tick_left()
+    plt.xticks(fontsize=11)
+
+    counts, bins = np.histogram(implaus, bins=40)
+    for i in range(len(bins) - 1):
+        bin_left = bins[i]
+        bin_right = bins[i + 1]
+        bin_center = (bin_left + bin_right) / 2
+        color = "darkgray" if bin_center > tol else "dodgerblue"
+        ax.bar(bin_left, counts[i], width=bin_right - bin_left, color=color, align='edge')
+
+    custom_legend = [
+        plt.Line2D([0], [0], color='dodgerblue', lw=6, label='plausible'),
+        plt.Line2D([0], [0], color='darkgray', lw=6, label='implausible')
+    ]
+    ax.legend(handles=custom_legend)
+    plt.xlabel("Implausibility Score", fontsize=12)
+    plt.ylabel("Count", fontsize=12)
+    plt.tight_layout()
 
 def update_sample(sample, update_vars, param_names):
     
@@ -446,10 +485,31 @@ def plot_emulator_validation(test_df, variable, r2, rmse):
     plt.xlabel(f'FATES mean annual mean {variable}')
     plt.ylabel(f'Emulated mean annual mean {variable}')
     plt.tight_layout()
+
+
+def get_full_array(X0, fixed_indices, X_default_all):
+    X0_full = np.zeros(len(X_default_all))
+    j = 0
+    for i in range(len(X_default_all)):
+        if i in fixed_indices:
+            X0_full[i] = X_default_all[i]
+        else:
+            X0_full[i] = X0[j]
+            j = j+1
+
+    return X0_full
+
+def get_params_to_optimize(sens_df, param_names, num_params, sobol_threshold=0.01):
     
-@tf.function
-def optimization_step_batch(X, emulator_array, targets, stdevs, X_default, optimizer,
-                            config):
+    sobol_indices = np.array([sens_df[sens_df.parameter == p]['ST'].sum() for p in param_names])
+    optimize_mask = sobol_indices > sobol_threshold
+    fixed_indices = np.where(np.logical_not(optimize_mask))[0]
+    optimize_indices = np.arange(num_params)[optimize_mask]
+    num_optimize = num_params - len(fixed_indices)
+
+    return fixed_indices, optimize_indices, num_optimize
+
+def misfit(X, emulator_array, targets, stdevs, fixed_indices, X_default_all, config):
     
     # grab and check config values
     lambda_penalty = config.get('lambda_penalty', None)
@@ -461,155 +521,69 @@ def optimization_step_batch(X, emulator_array, targets, stdevs, X_default, optim
     if barrier_strength < 0.0:
         raise ValueError("barrier_strength must be >= 0.")
     
-    earlystop_pct = config.get('earlystop_pct', 75.0)
-    if earlystop_pct <= 0.0:
-        raise ValueError("earlystop_pct must be > 0.")
+    # loop over each emulator/target/stddev
+    total_error = 0.0
+    for emulator, target, stddev in zip(emulator_array, targets, stdevs):
+        
+        X_full = get_full_array(X, fixed_indices, X_default_all)
+        y_pred, y_var = emulator(X_full.reshape(1,-1))
+        
+        # calculate loss
+        z = config['loss_fn'](y_pred, target, stddev, y_var)
+        total_error += z
+        
     
-    # batch size
-    batch_size = tf.shape(X)[0]  
+    # if lambda_penalty is not None:
+    #     penalty_per_sample = config['default_penalty_fn'](X, X_default_tiled)  # shape: [batch]
+    #     default_penalty = tf.maximum(penalty_per_sample / lambda_penalty, 1.0)
+    # else:
+    #     default_penalty = tf.ones_like(combined_loss)
+        
+    # if barrier_strength > 0.0:
+    #     # penalty for moving too close to bounds [0, 1]
+    #     barrier = config['barrier_penalty_fn'](X)
+    #     barrier_penalty = (1.0 + barrier_strength * barrier)
+    # else:
+    #     barrier_penalty = 1.0
+
+    #penalized_loss = combined_loss * default_penalty * barrier_penalty
     
-    # tile default params to match batch size
-    X_default_tiled = tf.tile(X_default, [batch_size, 1])
-
-    with tf.GradientTape() as tape:
-        
-        per_model_losses = []
-        
-        # loop over each emulator/target/stddev
-        for emulator, target, stddev in zip(emulator_array, targets, stdevs):
-            
-            # expand target and stdev to batch shape
-            target_tiled = tf.tile(tf.reshape(target, (1, -1)), [batch_size, 1])
-            stdev_tiled = tf.tile(tf.reshape(stddev, (1, -1)), [batch_size, 1])
-            
-            y_pred, y_var = emulator(X)
-            
-            # calculate loss
-            z = config['loss_fn'](y_pred, target_tiled, stdev_tiled, y_var)
-            loss_i = tf.reshape(z, [-1])
-            per_model_losses.append(loss_i)
-            
-        combined_loss = tf.add_n(per_model_losses)
-        
-        if lambda_penalty is not None:
-            penalty_per_sample = config['default_penalty_fn'](X, X_default_tiled)  # shape: [batch]
-            default_penalty = tf.maximum(penalty_per_sample / lambda_penalty, 1.0)
-        else:
-            default_penalty = tf.ones_like(combined_loss)
-            
-        if barrier_strength > 0.0:
-            # penalty for moving too close to bounds [0, 1]
-            barrier = config['barrier_penalty_fn'](X)
-            barrier_penalty = (1.0 + barrier_strength * barrier)
-        else:
-            barrier_penalty = 1.0
-
-        penalized_loss = combined_loss * default_penalty * barrier_penalty
-        
-        total_loss = tf.reduce_mean(penalized_loss)
-        max_z = tfp.stats.percentile(combined_loss, earlystop_pct, 
-                                     interpolation='midpoint')
+    #total_loss = tf.reduce_mean(penalized_loss)
+    # max_z = tfp.stats.percentile(combined_loss, earlystop_pct, 
+    #                                 interpolation='midpoint')
          
-    grads = tape.gradient(total_loss, [X])
-    optimizer.apply_gradients(zip(grads, [X]))
-    X.assign(tf.clip_by_value(X, 0.0, 1.0))
+    return total_error
 
-    return total_loss, max_z, penalized_loss
+def run_optimization(emulators, targets, sds, fixed_indices, X_default_all, num_optimize, config):
+    
+    x0 = np.random.rand(num_optimize)
+    bounds = [(0, 1)] * len(x0)
 
-def run_optimization(X: tf.Variable, emulator_array: List[Callable], targets: List[tf.Tensor], 
-                     stdevs: List[tf.Tensor], x_default: tf.Tensor, config: Dict) -> Tuple[tf.Tensor, Dict[str, List[float]]]:
-    """Run optmization loop with configurable parameters
+    result = minimize(
+        misfit,
+        x0,
+        args=(emulators, targets, sds, fixed_indices, X_default_all, config),
+        bounds=bounds,
+        method='L-BFGS-B',
+        options={'ftol': config['tol'], 'maxiter': config['maxiter']}
+    )
 
-    Args:
-        X (tf.Variable): Optimizable parameter tensor
-        emulator_array (List[Callable]): List of emulators returning (mean, variance)
-        targets (List[tf.Tensor]): List of observation targets (1D tensors)
-        stdevs (List[tf.Tensor]): List of observational standard deviations (1D tensors)
-        x_default (tf.Tensor): Default parameter tensor
-        config (Dict): Dictionary containing all config options.
-
-    Returns:
-        Tuple[tf.Tensor, Dict[str, List[float]]]:
-            - x_opt: final optimized parameters (numpy array)
-            - logs: Dictionary of loss histories
-    """
-    
-    if 'checkpoint_dir' not in config:
-        raise ValueError("Missing required config key: 'checkpoint_dir'")
-    
-    checkpoint_dir = config['checkpoint_dir']
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    # learning rate schedule
-    learning_rate = config.get('learning_rate', 1e-3)
-    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=learning_rate,
-        decay_steps=config.get('lr_decay_steps', 300),
-        decay_rate=0.5,
-        staircase=True)
-    
-    optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
-    
-    # ensure optimizer tracks 'x'
-    _ = optimizer.iterations # touch optimizer to ensure it is initialized
-    optimizer.apply_gradients([(tf.zeros_like(X), X)]) 
-        
-    # history trackers
-    logs = {
-        'total_loss': [],
-        'max_z': [],
-        'losses': [],
-    }
-    
-    for step in range(config.get('maxiter', 3000)):
-        
-        total_loss, max_z, losses = optimization_step_batch(X, emulator_array, targets, stdevs, x_default, optimizer, config)
-        
-        # log history
-        logs['total_loss'].append(total_loss.numpy())
-        logs['max_z'].append(max_z.numpy())
-        logs['losses'].append(losses.numpy())
-        
-        # periodic printout
-        if step % 10 == 0:
-            tf.print(f"Step {step:03d}: total={total_loss:.6f} max_z={max_z:.6f}")
-            
-        # save checkpoints
-        if step % config.get('checkpoint_n', 10) == 0:
-            checkpoint = {
-                'step': step,
-                'params': X.numpy(),
-                'loss': total_loss.numpy()
-            }
-            path = os.path.join(checkpoint_dir, f'checkpoint_step_{step}.pkl')
-            try:
-                with open(path, 'wb') as f:
-                    pickle.dump(checkpoint, f)
-            except Exception as e:
-                print(f"WARNING: Failed to save checkpoint at step {step}: {e}")
-                
-        # early stopping based on max implausibility
-        if tf.reduce_max(max_z) <= config.get('epsilon', 0.5):
-            print(f"Converged at step {step}")
-            tf.print(f"Step {step:03d}: total={total_loss:.6f} max_z={max_z:.6f}")
-            break
-
-    return X.numpy(), logs
+    return result
     
 def squared_z_loss(y_pred, target, stdev, y_var=None):
-    z = tf.abs((y_pred - target)/(stdev + 1e-8))
-    return tf.reduce_sum(z**2, axis=1)
+    z = np.abs((y_pred - target)/(stdev + 1e-8))
+    return z**2
 
 def implausibility_loss(y_pred, target, stdev, y_var):
     total_variance = y_var + stdev**2 + 1e-8 
-    z = tf.abs(y_pred - target) / tf.sqrt(total_variance)
-    return tf.reduce_sum(z**2, axis=1)
+    z = np.abs(y_pred - target) / np.sqrt(total_variance)
+    return z
 
 def default_penalty_l1(X, X_default):
-    return tf.reduce_sum(tf.abs(X - X_default), axis=1)
+    return np.sum(np.abs(X - X_default))
 
 def barrier_penalty(X):
-    return tf.reduce_mean(1.0 / (X + 1e-6) + 1.0 / (1.0 - X + 1e-6))
+    return np.mean(1.0 / (X + 1e-6) + 1.0 / (1.0 - X + 1e-6))
     
 def get_obs_mean_and_sd(df, variable):
     weighted_var = df['land_area']*df[variable]
@@ -626,10 +600,7 @@ def implausibility_metric(pred, obs, pred_var, obs_var):
 
     top = np.abs(pred - obs)
     bottom = np.sqrt(pred_var + obs_var)
-
-    imp = top/bottom
-
-    return imp
+    return top/bottom
 
 def calculate_implaus_sum(df, col_list):
     
@@ -693,3 +664,44 @@ def find_best_parameter_sets(sample):
     best_sample_index = sample[['implaus_sum']].idxmin()
     best_sample = sample.loc[best_sample_index, :]
     return best_sample
+
+
+def run_batch_optimization(emulators, targets, sds, fixed_indices, X_default_all, num_optimize, 
+                           param_names, optimize_indices, config, num_batch=100):
+
+    all_results = []
+    for i in range(num_batch):
+        result = run_optimization(emulators, targets, sds, fixed_indices, X_default_all, num_optimize, config)
+        df = pd.DataFrame({'parameter': param_names[optimize_indices],
+                          'values': result['x']})
+        df['batch'] = i
+        all_results.append(df)
+    all_out = pd.concat(all_results)
+    return all_out.pivot(index='batch', columns='parameter', values='values')
+
+def prep_calibration_data(obs, calibration_vars, obs_config, emulator_dir, pft_name, pft_id):
+    
+    # get observations for this pft
+    obs_pft = obs[obs.pft == pft_name]
+    
+    targets = []
+    sds = []
+    emulators = []
+    for variable in calibration_vars:
+        
+        # observations for this pft and variable
+        obs_mean, obs_sd = get_obs_mean_and_sd(obs_pft, obs_config[variable]['var'])
+        
+        # convert to tf objects
+        targets.append(obs_mean)
+        sds.append(obs_sd)
+
+        # load the emulator
+        emulators.append(TFEmulator(emulator_dir, pft=pft_id, variable=variable))
+        
+    return emulators, targets, sds
+
+def get_default_pft_values(default_norm, pft):
+    default_pft = default_norm[default_norm.pft == pft]
+    default_pft = default_pft.drop(columns=['pft'])
+    return default_pft.to_numpy().flatten()
