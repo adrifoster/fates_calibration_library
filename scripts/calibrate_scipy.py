@@ -10,12 +10,13 @@ import fates_calibration_library.utils as utils
 
 PFT_ID_CONFIG = '/glade/work/afoster/FATES_calibration/fates_calibration_library/configs/fates_pft_ids.yaml'
 OBS_CONFIG_FILE = '/glade/work/afoster/FATES_calibration/fates_calibration_library/configs/ilamb_conversion.yaml'
+CALIBRATION_VARS = ['GPP', 'EFLX_LH_TOT', 'FSH', 'EF']
 
 def commandline_args():
     """Parse and return command-line arguments"""
 
     description = """
-    Typical usage: python calibrate_scipy --pft 1
+    Typical usage: python calibrate_scipy.py --pft 1
 
     """
     parser = argparse.ArgumentParser(
@@ -42,7 +43,7 @@ def commandline_args():
     parser.add_argument(
         "--bootstraps",
         type=int,
-        default=1,
+        default=10,
         help="Number of times to run calibration\n",
     )
     parser.add_argument(
@@ -51,58 +52,56 @@ def commandline_args():
         default=0.01,
         help="Sobol index minimum\n",
     )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default='/glade/work/afoster/FATES_calibration/parameter_outputs',
+        help="Output directory for parameter files\n",
+    )
     args = parser.parse_args()
 
     return args
 
-def main():
-    
-    # pft IDS and information about history variables
-    pft_ids = utils.get_config_file(PFT_ID_CONFIG)
-    obs_config = utils.get_config_file(OBS_CONFIG_FILE)
-    
-    # calibration variables
-    calibration_vars = ['GPP', 'EFLX_LH_TOT', 'FSH', 'EF']
-    
-    # get arguments and config file
-    args = commandline_args()
-    ensemble_config = utils.get_config_file(args.config)
+def load_parameter_metadata(ensemble_config):
     
     # load Latin Hypercube key to get number of parameters
     lhc_key = pd.read_csv(ensemble_config['lhc_key_file'], index_col=[0])
     lhc_key = lhc_key.drop(columns=['ensemble'])
     param_names = lhc_key.columns
     num_params = len(param_names)
-        
-    # load parameter sensitivity
-    sens_df = pd.read_csv(os.path.join(args.emulator_dir, 
-                                       f"sensitivity_df_{ensemble_config['ensemble_name']}.csv"), index_col=[0])
-    
-    # get pfts
-    default_param = xr.open_dataset(ensemble_config['default_param'])
-    all_pfts = [str(pft).replace("b'", "").replace("'", "").strip() for pft in default_param.fates_pftname.values]
     
     # get normalized default parameter values
     default_norm = pd.read_csv(ensemble_config['default_norm'], index_col=[0])
     
-    pft_name = all_pfts[args.pft-1]
+    return param_names, num_params, default_norm
+    
+def get_pft_info(pft, default_param_file):
+    
+    pft_ids = utils.get_config_file(PFT_ID_CONFIG)
+    default_param = xr.open_dataset(default_param_file)
+    all_pfts = [str(pft).replace("b'", "").replace("'", "").strip() for pft in default_param.fates_pftname.values]
+    pft_name = all_pfts[pft-1]
     pft_id = pft_ids[pft_name]
+    
+    return pft_name, pft_id
+
+def load_emulator_and_obs_data(ensemble_config, pft_name, pft_id, emulator_dir):
     
     # load observations
     obs = pd.read_csv(ensemble_config['obs_df'], index_col=[0])
     obs_pft = obs[obs.pft == pft_name]
     
+    # load parameter sensitivity
+    sens_df = pd.read_csv(ensemble_config['sens_df'], index_col=[0])
     sens_pft = sens_df[sens_df.pft == pft_id]
     
-    emulators, targets, sds = em.prep_calibration_data(obs_pft, calibration_vars, obs_config, 
-                                                       args.emulator_dir, pft_name, pft_id)
+    obs_config = utils.get_config_file(OBS_CONFIG_FILE)
+    emulators, targets, sds = em.prep_calibration_data(obs_pft, CALIBRATION_VARS, obs_config, 
+                                                    emulator_dir, pft_name, pft_id)
     
-    
-    params_default = em.get_default_pft_values(default_norm, args.pft)
-    
-    fixed_indices, optimize_indices, num_optimize = em.get_params_to_optimize(sens_pft,
-                                                                              param_names, 
-                                                                              num_params, sobol_threshold=args.sobol)
+    return emulators, targets, sds, sens_pft
+
+def build_optimization_config(ensemble_config):
     
     # build config
     config = {
@@ -116,10 +115,45 @@ def main():
         'tol': 1e-3
     }
     
+    return config
+
+def save_results(df, out_dir, pft_name):
+    rank = MPI.COMM_WORLD.rank
+    file_name = f"params_{pft_name}_rank{rank}.csv"
+    df.to_csv(os.path.join(out_dir, file_name))
+    
+
+def main():
+    
+    # get arguments and config file
+    args = commandline_args()
+    ensemble_config = utils.get_config_file(args.config)
+    
+    # parameter information
+    param_names, num_params, default_norm = load_parameter_metadata(ensemble_config)
+    
+    # pft information
+    pft_name, pft_id = get_pft_info(args.pft, ensemble_config['default_param'])
+    
+    # emulators plus targets, SDS, and parameter sensitivity
+    emulators, targets, sds, sens_pft = load_emulator_and_obs_data(
+        ensemble_config, pft_name, pft_id, args.emulator_dir
+    )    
+    
+    # default parameter values (normalized)
+    params_default = em.get_default_pft_values(default_norm, args.pft)
+    
+    # get parameters that are going to be fixed vs. optimized
+    fixed_indices, optimize_indices, num_optimize = em.get_params_to_optimize(sens_pft,
+                                                                              param_names, 
+                                                                              num_params, sobol_threshold=args.sobol)
+    
+    config = build_optimization_config(ensemble_config)
     all_results = em.run_batch_optimization(emulators, targets, sds, fixed_indices, params_default, num_optimize, 
                            param_names, optimize_indices, config, num_batch=args.bootstraps)
-    all_results.to_csv('test_out.csv')
     
-        
+    save_results(all_results, args.out_dir, pft_name)
+
+
 if __name__ == "__main__":
     main()
