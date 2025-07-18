@@ -207,11 +207,11 @@ def update_sample(sample, update_vars, param_names):
 def test_emulator(model, X_test, y_test, variable_name):
 
     # predict test points with emulator
-    y_pred, y_pred_var = model.predict_y(np.asarray(X_test))
+    y_pred, y_pred_var = model.predict_y(np.asarray(X_test, dtype=np.float64))
     y_pred_sd = np.sqrt(y_pred_var.numpy().flatten())
     
     # ensure shapes are the same
-    y_test = np.asarray(y_test).reshape(-1)
+    y_test = np.asarray(y_test, dtype=np.float64).reshape(-1)
     
     df = {f'{variable_name}_test': y_test,
           f'{variable_name}_pred': y_pred.numpy().flatten(),
@@ -371,10 +371,10 @@ def train_emulator(X_train: np.ndarray, y_train: np.ndarray,
     """
     
     # ensure shapes are correct
-    y_train = np.asarray(y_train).reshape(-1, 1)
+    y_train = np.asarray(y_train, dtype=np.float64).reshape(-1, 1)
     
     # train GP model
-    model = gpflow.models.GPR(data=(np.asarray(X_train), y_train), kernel=kernel,
+    model = gpflow.models.GPR(data=(np.asarray(X_train, dtype=np.float64), y_train), kernel=kernel,
                             mean_function=None)
     
     # optimize model
@@ -532,7 +532,6 @@ def misfit(X, emulator_array, targets, stdevs, fixed_indices, X_default_all, con
         z = config['loss_fn'](y_pred, target, stddev, y_var)
         total_error += z
         
-    
     # if lambda_penalty is not None:
     #     penalty_per_sample = config['default_penalty_fn'](X, X_default_tiled)  # shape: [batch]
     #     default_penalty = tf.maximum(penalty_per_sample / lambda_penalty, 1.0)

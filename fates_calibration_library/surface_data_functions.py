@@ -44,8 +44,11 @@ def get_surdat(surdat_file: str) -> xr.Dataset:
     sum_veg = surdat.PCT_NAT_PFT.sum(dim="natpft") + surdat.PCT_CFT.sum(dim="cft")
     surdat["PCT_NAT_PFT"] = surdat["PCT_NAT_PFT"] / sum_veg * 100.0
     surdat["PCT_CFT"] = surdat["PCT_CFT"] / sum_veg * 100.0
+    
+    surdat['PCT_VEG'] = (surdat['PCT_NATVEG'] + surdat['PCT_CROP'])*surdat['LANDFRAC_PFT']
 
-    out = surdat[["PCT_NAT_PFT", "PCT_CFT", "LANDFRAC_PFT"]]
+    out = surdat[["PCT_NAT_PFT", "PCT_CFT", "LANDFRAC_PFT", "PCT_NATVEG", "PCT_CROP",
+                  'PCT_VEG', 'PCT_LAKE', 'PCT_GLACIER', 'PCT_URBAN']]
 
     return out
 

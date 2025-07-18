@@ -582,41 +582,6 @@ def plot_month_of_max_diff(da1, da2, ds1_name, ds2_name, fates_var):
     figure.suptitle(f"Comparison for Month of Max for {fates_var}")
 
 
-# def plot_pft_grid(colors, names, obs_data, obs_df):
-
-#     cmap = matplotlib.colors.ListedColormap(colors)
-
-#     fig, ax = plt.subplots(figsize=(13, 6), subplot_kw=dict(projection=ccrs.Robinson()))
-#     ax.coastlines()
-#     ocean = ax.add_feature(
-#         cfeature.NaturalEarthFeature("physical", "ocean", "110m", facecolor="white")
-#     )
-
-#     pcm = ax.pcolormesh(
-#         obs_data.lon,
-#         obs_data.lat,
-#         obs_data.biome,
-#         transform=ccrs.PlateCarree(),
-#         shading="auto",
-#         cmap=cmap,
-#         vmin=-0.5,
-#         vmax=9.5,
-#     )
-#     scatter = ax.scatter(
-#         obs_df.lon,
-#         obs_df.lat,
-#         s=10,
-#         c="none",
-#         edgecolor="black",
-#         transform=ccrs.PlateCarree(),
-#     )
-#     cbar = fig.colorbar(pcm, ax=ax, fraction=0.03, orientation="vertical")
-#     cbar.set_label("Biome", size=12, fontweight="bold")
-#     cbar.set_ticks([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-#     cbar.set_ticklabels(names)
-#     ax.set_extent([-50, 180, -10, 10])
-
-
 def plot_heatmap(summary_df):
     """Plot a heatmap of dataset means and relative differences."""
     # create a mask: Keep only 'Relative Difference (%)' for coloring
@@ -936,14 +901,14 @@ def plot_oaat_params(param_dat: pd.DataFrame, model: str):
 
         if fates_val > 0:
             ax.barh(y, fates_val, color=color)
-            t = ax.text(fates_val - 1, y, str(int(fates_val)), va='center', ha='center', 
+            t = ax.text(fates_val - 0.5, y, str(int(fates_val)), va='center', ha='center', 
                     fontsize=12, c='white', weight='bold')
             t.set_bbox(dict(facecolor=color, alpha=1, edgecolor=color))
             legend_elements[category] = Patch(facecolor=color, label=category)
 
         if clm_val > 0:
             ax.barh(y, clm_val, left=fates_val, color=color, hatch='///')
-            t = ax.text(fates_val + clm_val - 1, y, str(int(clm_val)), va='center', ha='center', 
+            t = ax.text(fates_val + clm_val - 0.5, y, str(int(clm_val)), va='center', ha='center', 
                     fontsize=12, c='white', weight='bold')
             t.set_bbox(dict(facecolor=color, alpha=1, edgecolor=color))
             legend_elements[category] = Patch(facecolor=color, label=category)
@@ -1174,78 +1139,6 @@ def plot_top_n(ds, default, variable, ylabel, units, xmin=None, xmax=None, by_bi
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
 
-
-# def plot_mean_var(obs_ds, obs_var, name, units, points, cmap, pft="all"):
-
-#     obs = average_obs_by_model(obs_ds, ILAMB_MODELS[obs_var.upper()], obs_var)
-#     vmin = obs[obs_var].min().values
-#     vmax = obs[obs_var].max().values
-
-#     fig, ax = plt.subplots(figsize=(13, 6), subplot_kw=dict(projection=ccrs.Robinson()))
-
-#     ax.coastlines()
-#     ax.add_feature(
-#         cfeature.NaturalEarthFeature("physical", "ocean", "110m", facecolor="white")
-#     )
-
-#     pcm = ax.pcolormesh(
-#         obs.lon,
-#         obs.lat,
-#         obs[obs_var],
-#         transform=ccrs.PlateCarree(),
-#         shading="auto",
-#         cmap=cmap,
-#         vmin=vmin,
-#         vmax=vmax,
-#     )
-#     if pft != "all":
-#         points = points[points.pft == pft]
-
-#     ax.scatter(
-#         points.lon,
-#         points.lat,
-#         s=15,
-#         c="none",
-#         edgecolor="black",
-#         transform=ccrs.PlateCarree(),
-#     )
-
-#     cbar = fig.colorbar(pcm, ax=ax, fraction=0.03, orientation="horizontal")
-#     cbar.set_label(f"Observed {name} ({units})", size=10, fontweight="bold")
-
-
-# def plot_obs_hists(obs_df, pft, vars, names, units):
-
-#     palette, biome_names = get_biome_palette()
-
-#     pft_df = obs_df[obs_df.pft == pft]
-#     fig, axes = plt.subplots(figsize=(12, 12), nrows=2, ncols=2)
-#     axes = axes.flatten(order=("C"))
-#     for i, ax in enumerate(axes):
-#         sns.histplot(
-#             data=pft_df,
-#             x=vars[i],
-#             hue="biome",
-#             stat="count",
-#             edgecolor=None,
-#             palette=palette,
-#             multiple="stack",
-#             ax=ax,
-#         )
-#         ax.set_ylabel("Number of Gridcells", fontsize=11)
-#         ax.set_xlabel(f"Observed {names[i]} ({units[i]})", fontsize=11)
-#         ax.get_legend().remove()
-
-#     handles, labels = axes[0].get_legend_handles_labels()
-#     axes[0].legend(
-#         handles,
-#         labels,
-#         title="Biome",
-#         labels=np.flip([biome_names[int(b)] for b in np.unique(pft_df.biome)]),
-#     )
-#     fig.suptitle(f"Observations for {pft} grids")
-#     fig.tight_layout()
-
 def plot_oaat_climatology(climatology_ens, default, variable, variable_name, 
                           units, interesting_ensembles):
     
@@ -1262,21 +1155,22 @@ def plot_oaat_climatology(climatology_ens, default, variable, variable_name,
     plt.plot([], [], color='red', label='Default')
     
     # Highlight & annotate interesting ensembles
-    for ens in interesting_ensembles:
-        sub = climatology_ens.sel(ensemble=ens)
-        param_name = climatology_ens.sel(ensemble=ens).parameter_name.values
-        type = climatology_ens.sel(ensemble=ens).type.values
-        label = f'{param_name} {type}'
-        line = plt.plot(sub[variable].month, sub[variable], color='k')[0]
-        x = 6
-        y = sub[variable].sel(month=x).values
-        texts.append(
-            plt.text(
-                x + 0.2, y, label,
-                fontsize=9,
-                bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='black', alpha=0.8)
+    if interesting_ensembles is not None:
+        for ens in interesting_ensembles:
+            sub = climatology_ens.sel(ensemble=ens)
+            param_name = climatology_ens.sel(ensemble=ens).parameter_name.values
+            type = climatology_ens.sel(ensemble=ens).type.values
+            label = f'{param_name} {type}'
+            line = plt.plot(sub[variable].month, sub[variable], color='k')[0]
+            x = 6
+            y = sub[variable].sel(month=x).values
+            texts.append(
+                plt.text(
+                    x + 0.2, y, label,
+                    fontsize=9,
+                    bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='black', alpha=0.8)
+                )
             )
-        )
     adjust_text(
         texts,
         arrowprops=dict(arrowstyle='->', color='black'),

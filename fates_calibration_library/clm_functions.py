@@ -767,7 +767,7 @@ def get_pft_grids(land_mask_file, mesh_file, pft):
 
     return pft_grids
 
-def attach_land_area(ensemble, pft_grids, target_grid_file):
+def attach_land_area(ensemble, pft_grids, target_grid_file, surdat):
 
     ds_grid = xr.open_dataset(target_grid_file)
     ds0 = ds_grid.isel(time=0)
@@ -791,22 +791,34 @@ def attach_land_area(ensemble, pft_grids, target_grid_file):
         # grab data at correct lat/lon
         area[i] = land_area[nearest_index_lat, nearest_index_lon]
         frac[i] = land_frac[nearest_index_lat, nearest_index_lon]
+        
+    lats = surdat.lat
+    lons = surdat.lon
+    pct_lake = surdat.PCT_LAKE
+    lake = np.zeros(len(grid_lats))
+    for i in range(len(grid_lats)):
+        nearest_index_lat = np.abs(lats - grid_lats[i]).argmin()
+        nearest_index_lon = np.abs(lons - grid_lons[i]).argmin()
+        lake[i] = pct_lake[nearest_index_lat, nearest_index_lon]
 
     ensemble['land_area'] = xr.DataArray(area, coords={"gridcell": pft_grids})
     ensemble['land_area'].attrs = {'units': ds0.area.attrs['units']}
     
     ensemble['land_frac'] = xr.DataArray(frac, coords={"gridcell": pft_grids})
     ensemble['land_frac'].attrs = {'units': '0-1'}
+    
+    ensemble['pct_lake'] = xr.DataArray(lake, coords={"gridcell": pft_grids})
+    ensemble['pct_lake'].attrs = {'units': '0-1'}
 
     return ensemble
 
-def get_pft_ensemble(ensemble_file, pft_grids, target_grid_file):
+def get_pft_ensemble(ensemble_file, pft_grids, target_grid_file, surdat):
     
     ensemble = xr.open_dataset(ensemble_file)
     
     ensemble_pft = ensemble.where(ensemble.gridcell.isin(pft_grids), drop=True)
 
-    ensemble_pft = attach_land_area(ensemble_pft, pft_grids, target_grid_file)
+    ensemble_pft = attach_land_area(ensemble_pft, pft_grids, target_grid_file, surdat)
 
     return ensemble_pft
 

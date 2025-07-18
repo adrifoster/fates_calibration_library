@@ -384,11 +384,11 @@ def get_vardiff(da, baseline_dat, variables, params, reldiff=False):
                 var_max = da.isel(ensemble=0)
             
             if reldiff:
-                var_diff = np.abs(var_max[variable].values - var_min[variable].values)/baseline_dat[variable].values
+                var_diff = np.abs(var_max[variable].values - var_min[variable].values)/baseline_dat[variable].values*100.0
             else:
                 var_diff = np.abs(var_max[variable].values - var_min[variable].values)
             
-            diff = var_diff[0]*100.0
+            diff = var_diff[0]
             var_diffs[param][variable] = diff
 
         var_df = pd.DataFrame.from_dict(var_diffs, orient='index')

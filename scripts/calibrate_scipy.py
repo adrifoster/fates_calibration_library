@@ -109,7 +109,7 @@ def build_optimization_config(ensemble_config):
         'epsilon': 0.5,
         'lambda_penalty': None,
         'barrier_strength': 0,
-        'loss_fn': em.implausibility_loss,
+        'loss_fn': em.squared_z_loss,
         'default_penalty_fn': em.default_penalty_l1,
         'barrier_penalty_fn': em.barrier_penalty,
         'tol': 1e-3
