@@ -692,9 +692,9 @@ def get_param_percent_change(
     """
     percent_change = get_percentage_change(change_str)
     if oaat_type == "param_min":
-        return default_value - np.abs(default_value * (percent_change / 100.0))
+        return (default_value - np.abs(default_value * (percent_change / 100.0))).values
     if oaat_type == "param_max":
-        return default_value + np.abs(default_value * (percent_change / 100.0))
+        return (default_value + np.abs(default_value * (percent_change / 100.0))).values
 
     print("Need to supply param_min or param_max")
     return None

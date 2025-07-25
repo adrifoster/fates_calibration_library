@@ -1,0 +1,17 @@
+0: not_vegetated
+1: needleleaf_evergreen_temperate_tree
+2: needleleaf_evergreen_boreal_tree
+3: needleleaf_deciduous_boreal_tree
+4: broadleaf_evergreen_tropical_tree
+5: broadleaf_evergreen_temperate_tree
+6: broadleaf_deciduous_tropical_tree
+7: broadleaf_deciduous_temperate_tree
+8: broadleaf_deciduous_boreal_tree
+9: broadleaf_evergreen_shrub
+10: broadleaf_deciduous_temperate_shrub
+11: broadleaf_deciduous_boreal_shrub
+12: c3_arctic_grass
+13: c3_non-arctic_grass
+14: c4_grass
+15: c3_crop
+16: c3_irrigated

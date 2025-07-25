@@ -55,7 +55,6 @@ def commandline_args():
     parser.add_argument(
         "--out-dir",
         type=str,
-        default='/glade/work/afoster/FATES_calibration/parameter_outputs',
         help="Output directory for parameter files\n",
     )
     args = parser.parse_args()
@@ -90,6 +89,9 @@ def load_emulator_and_obs_data(ensemble_config, pft_name, pft_id, emulator_dir):
     # load observations
     obs = pd.read_csv(ensemble_config['obs_df'], index_col=[0])
     obs_pft = obs[obs.pft == pft_name]
+    obs_pft = obs_pft[obs_pft.land_frac > 0.99]
+    if pft_id != 'AC3G':
+        obs_pft = obs_pft[obs_pft.pct_lake < 30]
     
     # load parameter sensitivity
     sens_df = pd.read_csv(ensemble_config['sens_df'], index_col=[0])

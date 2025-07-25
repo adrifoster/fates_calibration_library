@@ -11,6 +11,7 @@ from matplotlib.lines import Line2D
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.mpl.geocollection import GeoQuadMesh
+from matplotlib.patches import Rectangle
 from matplotlib.patches import Patch
 import seaborn as sns
 from adjustText import adjust_text
@@ -1242,7 +1243,8 @@ def plot_params(default_param_data, param_ds, parameter):
         ax.axhline(y=sub_def, color='r', linestyle='--')
     plt.suptitle(parameter)
     
-def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, units):
+def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, units,
+                           obs=None):
     
     both = pd.concat([ds1, ds2])
     
@@ -1267,6 +1269,10 @@ def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, un
     plt.errorbar(x=[ds2_name], y=ds2_mean_val,yerr=[[ds2_yerr[0]], [ds2_yerr[1]]],
                 fmt='o', color='black', ecolor='black',
                 capsize=15)
+    
+    if obs is not None:
+        plt.axhline(obs, color='red', linestyle='--')
+
 
     handles = g._legend.legend_handles
     labels = [text.get_text() for text in g._legend.texts]
@@ -1278,4 +1284,79 @@ def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, un
             borderaxespad=0.)
     plt.xlabel(None)
     plt.ylabel(f"{long_name} ({units})")
+    plt.tight_layout()
+    
+def plot_sample(ensemble, obs_mean, obs_sd, pft_id, var, units):
+    
+    plt.figure(figsize=(7, 5))
+    ax = plt.subplot(111)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.get_xaxis().tick_bottom()
+    ax.get_yaxis().tick_left()
+    plt.xticks(fontsize=11)
+
+    my_hist, _ = np.histogram(ensemble, bins=40)
+    
+    plt.hist(ensemble, fc="darkgray", bins=40, alpha=0.75)
+    maxv = my_hist.max()
+
+    patch = Rectangle((obs_mean - obs_sd, 0), 2*obs_sd, maxv,
+                        facecolor='red', alpha=0.4, label="Observed ± SD")
+    ax.add_patch(patch)
+    ax.axvline(x=obs_mean, ymin=0.0, ymax=maxv, color='r', label="Observed Mean")
+    
+    plt.xlabel(f"{pft_id}: Annual {var} ({units})", fontsize=12)
+    plt.ylabel("Count", fontsize=12)
+    plt.tight_layout()
+    
+def plot_mean_var(obs, lats, lons, cmap):
+
+    fig, ax = plt.subplots(figsize=(13, 6), subplot_kw=dict(projection=ccrs.Robinson()))
+
+    ax.coastlines()
+    ax.add_feature(
+        cfeature.NaturalEarthFeature("physical", "ocean", "110m", facecolor="white")
+    )
+
+    pcm = ax.pcolormesh(
+        obs.lon,
+        obs.lat,
+        obs,
+        transform=ccrs.PlateCarree(),
+        shading="auto",
+        cmap=cmap,
+    )
+    ax.scatter(
+        lons,
+        lats,
+        s=15,
+        c="none",
+        edgecolor="black",
+        transform=ccrs.PlateCarree(),
+    )
+
+    cbar = fig.colorbar(pcm, ax=ax, fraction=0.03, orientation="horizontal")
+
+
+def plot_pft_matrix(fates_to_clm, clm_index_to_name):
+
+    # Prepare matrix
+    fates_labels = list(fates_to_clm.keys())
+    clm_labels = [clm_index_to_name[i] for i in range(17)]
+    
+    matrix = pd.DataFrame(0, index=fates_labels, columns=clm_labels)
+    
+    # Fill the matrix with 1s where mappings exist
+    for fates, clm_indices in fates_to_clm.items():
+        for idx in clm_indices:
+            clm_name = clm_index_to_name.get(idx, f"CLM_{idx}")
+            matrix.loc[fates, clm_name] = 1
+    
+    # Plot heatmap
+    plt.figure(figsize=(10, 9))
+    sns.heatmap(matrix, cmap='Blues', cbar=False, linewidths=0.5, linecolor='lightgray', fmt='d')
+    plt.xlabel("CLM PFTs")
+    plt.ylabel("FATES PFTs")
+    plt.xticks(rotation=45, ha='right')
     plt.tight_layout()

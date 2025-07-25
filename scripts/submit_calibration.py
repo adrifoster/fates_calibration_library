@@ -19,7 +19,7 @@ module load conda
 conda activate fates_calibration
 
 cd {script_dir}
-mpiexec -n {mpi} python {script_name} --pft {pft_id} --bootstraps {bootstraps}
+mpiexec -n {mpi} python {script_name} --pft {pft_id} --bootstraps {bootstraps} --out-dir {out_dir}
 """
 
 def parse_args():
@@ -70,7 +70,7 @@ def main():
         raise IOError(f"ERROR: Script not found: {script_path}")
     
     for pft_id in args.pfts:
-        output_dir = os.path.join(args.output_base, f"{pft_id}_outputs/samples")
+        output_dir = os.path.join(args.output_base, f"{pft_id}_outputs")
         job_file = os.path.join(args.job_dir, f"calib_{pft_id}.pbs")
 
         job_content = PBS_TEMPLATE.format(
@@ -85,7 +85,8 @@ def main():
             job_dir=args.job_dir,
             script_dir=args.script_dir,
             script_name=args.script,
-            bootstraps=args.bootstraps
+            bootstraps=args.bootstraps,
+            out_dir=output_dir
         )
 
         if args.dry_run:

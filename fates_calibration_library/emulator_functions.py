@@ -704,3 +704,12 @@ def get_default_pft_values(default_norm, pft):
     default_pft = default_norm[default_norm.pft == pft]
     default_pft = default_pft.drop(columns=['pft'])
     return default_pft.to_numpy().flatten()
+
+def get_calibrated_distribution(param_dir):
+    param_files = [os.path.join(param_dir, f) for f in os.listdir(param_dir) if f.endswith('.csv')]
+    dat_list = []
+    for file in param_files:
+        dat_list.append(pd.read_csv(file))
+    dat = pd.concat(dat_list)
+    dat = dat.drop(columns=['batch'])
+    return dat
