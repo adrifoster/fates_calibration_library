@@ -10,7 +10,7 @@ import fates_calibration_library.utils as utils
 
 PFT_ID_CONFIG = '/glade/work/afoster/FATES_calibration/fates_calibration_library/configs/fates_pft_ids.yaml'
 OBS_CONFIG_FILE = '/glade/work/afoster/FATES_calibration/fates_calibration_library/configs/ilamb_conversion.yaml'
-CALIBRATION_VARS = ['GPP', 'EFLX_LH_TOT', 'FSH', 'EF']
+CALIB_VAR_FILE = '/glade/work/afoster/FATES_calibration/emulator_configs/calibration_vars.yaml'
 
 def commandline_args():
     """Parse and return command-line arguments"""
@@ -25,8 +25,14 @@ def commandline_args():
     parser.add_argument(
         "--config",
         type=str,
-        default='/glade/work/afoster/FATES_calibration/emulator_configs/dom_pft.config',
+        default='/glade/work/afoster/FATES_calibration/emulator_configs/dom_pft.yaml',
         help='Config file with information about ensemble\n',
+    )
+    parser.add_argument(
+        "--param-update-file",
+        type=str,
+        default='/glade/work/afoster/FATES_calibration/emulator_configs/param_min_max.yaml',
+        help='Config file with updated (normalized) parameter min/maxes\n',
     )
     parser.add_argument(
         "--emulator-dir",
@@ -84,7 +90,7 @@ def get_pft_info(pft, default_param_file):
     
     return pft_name, pft_id
 
-def load_emulator_and_obs_data(ensemble_config, pft_name, pft_id, emulator_dir):
+def load_emulator_and_obs_data(ensemble_config, pft_name, pft_id, emulator_dir, calibration_vars):
     
     # load observations
     obs = pd.read_csv(ensemble_config['obs_df'], index_col=[0])
@@ -98,7 +104,7 @@ def load_emulator_and_obs_data(ensemble_config, pft_name, pft_id, emulator_dir):
     sens_pft = sens_df[sens_df.pft == pft_id]
     
     obs_config = utils.get_config_file(OBS_CONFIG_FILE)
-    emulators, targets, sds = em.prep_calibration_data(obs_pft, CALIBRATION_VARS, obs_config, 
+    emulators, targets, sds = em.prep_calibration_data(obs_pft, calibration_vars, obs_config, 
                                                     emulator_dir, pft_name, pft_id)
     
     return emulators, targets, sds, sens_pft
@@ -130,6 +136,9 @@ def main():
     # get arguments and config file
     args = commandline_args()
     ensemble_config = utils.get_config_file(args.config)
+    calib_vars_config = utils.get_config_file(CALIB_VAR_FILE)
+    
+    param_update_config = utils.get_config_file(args.param_update_file)
     
     # parameter information
     param_names, num_params, default_norm = load_parameter_metadata(ensemble_config)
@@ -139,7 +148,7 @@ def main():
     
     # emulators plus targets, SDS, and parameter sensitivity
     emulators, targets, sds, sens_pft = load_emulator_and_obs_data(
-        ensemble_config, pft_name, pft_id, args.emulator_dir
+        ensemble_config, pft_name, pft_id, args.emulator_dir, calib_vars_config[pft_id],
     )    
     
     # default parameter values (normalized)
@@ -152,7 +161,8 @@ def main():
     
     config = build_optimization_config(ensemble_config)
     all_results = em.run_batch_optimization(emulators, targets, sds, fixed_indices, params_default, num_optimize, 
-                           param_names, optimize_indices, config, num_batch=args.bootstraps)
+                           param_names, optimize_indices, config, param_update_config, 
+                           num_batch=args.bootstraps)
     
     save_results(all_results, args.out_dir, pft_name)
 

@@ -511,16 +511,6 @@ def get_params_to_optimize(sens_df, param_names, num_params, sobol_threshold=0.0
 
 def misfit(X, emulator_array, targets, stdevs, fixed_indices, X_default_all, config):
     
-    # grab and check config values
-    lambda_penalty = config.get('lambda_penalty', None)
-    if lambda_penalty is not None:
-        if lambda_penalty <= 0.0:
-            raise ValueError("lambda_penalty must be > 0.")
-    
-    barrier_strength = config.get('barrier_strenth', 0.0)
-    if barrier_strength < 0.0:
-        raise ValueError("barrier_strength must be >= 0.")
-    
     # loop over each emulator/target/stddev
     total_error = 0.0
     for emulator, target, stddev in zip(emulator_array, targets, stdevs):
@@ -532,31 +522,18 @@ def misfit(X, emulator_array, targets, stdevs, fixed_indices, X_default_all, con
         z = config['loss_fn'](y_pred, target, stddev, y_var)
         total_error += z
         
-    # if lambda_penalty is not None:
-    #     penalty_per_sample = config['default_penalty_fn'](X, X_default_tiled)  # shape: [batch]
-    #     default_penalty = tf.maximum(penalty_per_sample / lambda_penalty, 1.0)
-    # else:
-    #     default_penalty = tf.ones_like(combined_loss)
-        
-    # if barrier_strength > 0.0:
-    #     # penalty for moving too close to bounds [0, 1]
-    #     barrier = config['barrier_penalty_fn'](X)
-    #     barrier_penalty = (1.0 + barrier_strength * barrier)
-    # else:
-    #     barrier_penalty = 1.0
-
-    #penalized_loss = combined_loss * default_penalty * barrier_penalty
-    
-    #total_loss = tf.reduce_mean(penalized_loss)
-    # max_z = tfp.stats.percentile(combined_loss, earlystop_pct, 
-    #                                 interpolation='midpoint')
-         
     return total_error
 
-def run_optimization(emulators, targets, sds, fixed_indices, X_default_all, num_optimize, config):
+def run_optimization(emulators, targets, sds, fixed_indices, optimize_pars, 
+                     X_default_all, num_optimize, config, param_update_config):
     
     x0 = np.random.rand(num_optimize)
     bounds = [(0, 1)] * len(x0)
+    
+    for parameter, par_bounds in param_update_config.items():
+        if parameter in optimize_pars:
+            idx = np.argwhere(optimize_pars == parameter)[0][0]
+            bounds[idx] = (par_bounds['min_val'], par_bounds['max_val'])
 
     result = minimize(
         misfit,
@@ -666,11 +643,15 @@ def find_best_parameter_sets(sample):
 
 
 def run_batch_optimization(emulators, targets, sds, fixed_indices, X_default_all, num_optimize, 
-                           param_names, optimize_indices, config, num_batch=100):
+                           param_names, optimize_indices, config, 
+                           param_update_config, num_batch=100):
 
+    optimize_pars = param_names[optimize_indices]
+    
     all_results = []
     for i in range(num_batch):
-        result = run_optimization(emulators, targets, sds, fixed_indices, X_default_all, num_optimize, config)
+        result = run_optimization(emulators, targets, sds, fixed_indices, optimize_pars,
+                                  X_default_all, num_optimize, config, param_update_config)
         df = pd.DataFrame({'parameter': param_names[optimize_indices],
                           'values': result['x']})
         df['batch'] = i

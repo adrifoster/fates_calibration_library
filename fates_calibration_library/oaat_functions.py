@@ -4,6 +4,8 @@ import xarray as xr
 import numpy as np
 import os
 import pandas as pd
+from collections import Counter
+from collections import defaultdict
 
 from fates_calibration_library.analysis_functions import compute_infl, get_start_end_slopes
 
@@ -176,7 +178,7 @@ def get_min_max_diff(ds: xr.Dataset) -> pd.DataFrame:
     return df_diffs
 
 def get_top_n(ds: xr.Dataset, df_diffs: pd.DataFrame, variable: str, n: int,
-              exclude_list=None) -> pd.DataFrame:
+              default_ds, exclude_list=None) -> pd.DataFrame:
     """Gets the top n ensemble members with the most impact on variable
 
     Args:
@@ -198,16 +200,29 @@ def get_top_n(ds: xr.Dataset, df_diffs: pd.DataFrame, variable: str, n: int,
     results = []
     for param in top_params:
         sub = ds.where(ds.parameter_name == param, drop=True)
-        min_run = sub.where(sub.type == 'min', drop=True).isel(ensemble=0)
-        max_run = sub.where(sub.type == 'max', drop=True).isel(ensemble=0)
+        
+        if (sub.type == 'min').any():
+            min_run = sub.where(sub.type == 'min', drop=True).isel(ensemble=0)
+            category = min_run['category'].item()
+            subcategory = min_run['subcategory'].item()
+        else:
+            min_run = default_ds
 
+        # Check if 'max' exists in the group
+        if (sub.type == 'max').any():
+            max_run = sub.where(sub.type == 'max', drop=True).isel(ensemble=0)
+            category = max_run['category'].item()
+            subcategory = max_run['subcategory'].item()
+        else:
+            max_run = default_ds
+    
         results.append({
             'parameter_name': param,
             'min_val': min_run[variable].item(),
             'max_val': max_run[variable].item(),
-            'difference': max_run[variable].item() - max_run[variable].item(),
-            'category': min_run['category'].item(),
-            'subcategory': min_run['subcategory'].item()
+            'difference': max_run[variable].item() - min_run[variable].item(),
+            'category': category,
+            'subcategory': subcategory
         })
     return pd.DataFrame(results)
 
@@ -362,14 +377,17 @@ def get_clm_paramdiffs(param_dir, param_prefix, default_param, clm_params,
         
     return pd.DataFrame.from_dict(diffs, orient='index')
 
-def get_vardiff(da, baseline_dat, variables, params, reldiff=False):
+def get_vardiff(da, baseline_dat, variables, params, n, reldiff=False, include_sd=True):
     
     all_var_dfs = {}
+    all_var_sd_dfs = {}
     for variable in variables:
         var_diffs = {}
+        var_sds = {}
 
         for param in params:
             var_diffs[param] = {}
+            var_sds[param] = {}
 
             dat = da.where(da.parameter_name == param, drop=True)
             
@@ -384,17 +402,30 @@ def get_vardiff(da, baseline_dat, variables, params, reldiff=False):
                 var_max = da.isel(ensemble=0)
             
             if reldiff:
-                var_diff = np.abs(var_max[variable].values - var_min[variable].values)/baseline_dat[variable].values*100.0
+                var_diff = np.abs(var_max.sel(summation_var='mean')[variable].values - var_min.sel(summation_var='mean')[variable].values)/baseline_dat.sel(summation_var='mean')[variable].values*100.0
+                sd_diff = np.sqrt(var_max.sel(summation_var='iav')[variable].values/n + var_min.sel(summation_var='iav')[variable].values/n)/baseline_dat.sel(summation_var='mean')[variable].values*100.0
             else:
-                var_diff = np.abs(var_max[variable].values - var_min[variable].values)
+                var_diff = np.abs(var_max.sel(summation_var='mean')[variable].values - var_min.sel(summation_var='mean')[variable].values)
+                sd_diff = np.sqrt(var_max.sel(summation_var='iav')[variable].values/n + var_min.sel(summation_var='iav')[variable].values/n)
             
             diff = var_diff[0]
+            diff_sd = sd_diff[0]
             var_diffs[param][variable] = diff
+            var_sds[param][variable] = diff_sd
+            
 
         var_df = pd.DataFrame.from_dict(var_diffs, orient='index')
+        var_sd_df = pd.DataFrame.from_dict(var_sds, orient='index')
         all_var_dfs[variable] = var_df
+        all_var_sd_dfs[variable] = var_sd_df
+        
+    mean_df = pd.concat(all_var_dfs.values(), axis=1)
+    sd_df = pd.concat(all_var_sd_dfs.values(), axis=1)
     
-    return pd.concat(all_var_dfs.values(), axis=1)
+    if include_sd:
+        return pd.merge(mean_df, sd_df, left_index=True, right_index=True, suffixes=('_mean', '_sd'))
+    else:
+        return mean_df
 
 def get_S1diff(da, baseline_dat, variables, params, diff_df, reldiff=False):
     
@@ -480,3 +511,173 @@ def get_categorical_cumulative_variance(df, param_info, parameters, param_chunks
     subset = grouped[grouped.chunk <= 50]
     
     return subset.pivot(index='chunk', columns='category', values='cum_sum_cat').fillna(0)
+
+def get_ensemble_ranges(ensemble_df, vars):
+    mean_vals = {}
+    max_vals = {}
+    min_vals = {}
+    diff = {}
+    stds = {}
+    for variable in vars:
+        mean_vals[variable] = ensemble_df[variable].mean()
+        max_vals[variable] = ensemble_df[variable].max()
+        min_vals[variable] = ensemble_df[variable].min()
+        stds[variable] = ensemble_df[variable].std()
+        diff[variable] = np.abs(ensemble_df[variable].max() - ensemble_df[variable].min())
+    
+    df = pd.DataFrame({
+        'mean': mean_vals,
+        'max': max_vals,
+        'min': min_vals,
+        'range': diff,
+        'std': stds,
+    })
+    df['variable'] = df.index
+    df['CV'] = df['std']/df['mean']
+    
+    return df
+
+def print_ensemble_range(df, model, variable, units):
+    min_val = df[variable].min()
+    max_val = df[variable].max()
+    mean_val = df[variable].mean()
+    diff = np.abs(max_val - min_val)
+    print(f'{model} {variable} ranges from', round(min_val, 1),
+          'to', round(max_val, 1), units)
+    print('This is a range of ', round(diff, 1), units)
+    print('And a mean of ', round(mean_val, 1), units)
+
+def get_both_ranges(fates_ensemble, clm_ensemble, vars):
+    fates_df = get_ensemble_ranges(fates_ensemble, vars)
+    fates_df['model'] = 'FATES'
+
+    clm_df = get_ensemble_ranges(clm_ensemble, vars)
+    clm_df['model'] = 'CLM'
+
+    range_df = pd.concat([fates_df, clm_df])
+
+    mean_df = np.abs(range_df.groupby('variable')['mean'].mean())
+    
+    range_df['range_norm'] = range_df.apply(lambda row: row['range'] / mean_df[row['variable']], axis=1)
+
+    return range_df
+
+def get_all_cumulative_variance(variables, clm_pars, clm_glob, fates_pars, fates_glob, 
+                                n=5):
+    variances = {}
+    for variable in variables:
+        variances[variable] = {}
+    
+        clm_var = get_param_variance(clm_pars, variable, clm_glob, 0)
+        variances[variable]['CLM'] = get_cumulative_variance(clm_var, clm_pars, n)
+    
+        fates_var = get_param_variance(fates_pars, variable, fates_glob, 0)
+        variances[variable]['FATES'] = get_cumulative_variance(fates_var, fates_pars, n)
+
+    return variances
+
+def get_number_required(df, model, variable, tol=0.9):
+    arr = df[variable][model].values
+    return np.argmax(arr > tol)
+
+def get_all_required(df, vars, tol=0.9):
+
+    parameter_number_CLM = {}
+    for variable in vars:
+        parameter_number_CLM[variable] = get_number_required(df, 'CLM', variable, tol)
+    
+    clm_df = pd.DataFrame({
+        'parameters': parameter_number_CLM,
+    })
+    clm_df['model'] = 'CLM'
+    
+    parameter_number_FATES = {}
+    for variable in vars:
+        parameter_number_FATES[variable] = get_number_required(df, 'FATES', variable, tol)
+    
+    fates_df = pd.DataFrame({
+        'parameters': parameter_number_FATES,
+    })
+    fates_df['model'] = 'FATES'
+
+    df = pd.concat([fates_df, clm_df])
+    df['variable'] = df.index
+    return df
+
+def get_param_counts_in_top_n(top_params):
+
+    rows = []
+    for variable, params in top_params.items():
+        for param in params:
+            rows.append({'parameter': param, 'variable': variable, 'top10_count': 1})
+    
+    df = pd.DataFrame(rows)
+    param_counts = Counter(df.parameter)
+    
+    df = pd.DataFrame.from_dict(param_counts, orient='index', columns=['count'])
+    df['parameter'] = df.index
+    return df.sort_values(by='count', ascending=False)
+
+def get_param_count_summary(top10_params_by_variable, output_groups):
+    
+    rows = []
+    for variable, params in top10_params_by_variable.items():
+        for param in params:
+            rows.append({'parameter': param, 'variable': variable, 'top10_count': 1})
+    
+    df = pd.DataFrame(rows)
+    var_to_group = {var: group for group, vars_ in output_groups.items() for var in vars_}
+    df['group'] = df['variable'].map(var_to_group)
+
+    param_stats = defaultdict(lambda: {'total_count': 0, 'groups': set(), 'per_group': defaultdict(int)})
+    
+    for _, row in df.iterrows():
+        param = row['parameter']
+        group = row['group']
+        count = row['top10_count']
+    
+        param_stats[param]['total_count'] += count
+        param_stats[param]['groups'].add(group)
+        param_stats[param]['per_group'][group] += count
+
+    summary = []
+    
+    for param, info in param_stats.items():
+        summary.append({
+            'parameter': param,
+            'n_groups': len(info['groups']),
+            'total_top10_count': info['total_count'],
+            'avg_per_group': info['total_count'] / len(info['groups']) if info['groups'] else 0
+        })
+    
+    summary_df = pd.DataFrame(summary).sort_values(by=['n_groups', 'total_top10_count'], ascending=False)
+
+    return summary_df
+
+def get_all_vardiffs(variables, clmbtran_mean, fatesclm_mean, fates_mean,
+                     nonzero_params, n, reldiff=False):
+    
+    clm_diffs = get_vardiff(clmbtran_mean, clmbtran_mean.sel(ensemble=0),
+                                variables, nonzero_params['clm_parameters'], n,
+                                reldiff=reldiff)
+    clm_diffs['model'] = 'CLM'
+    clm_diffs['parameter'] = clm_diffs.index
+    
+    fatesclm_diffs = get_vardiff(fatesclm_mean, fatesclm_mean.sel(ensemble=0),
+                                     variables, nonzero_params['fates_clm'], n,
+                                     reldiff=reldiff)
+    fatesclm_diffs['model'] = 'FATES'
+    fatesclm_diffs['parameter'] = fatesclm_diffs.index
+
+    fates_diffs = get_vardiff(fates_mean, fates_mean.sel(ensemble=0),
+                                         variables, nonzero_params['fates_only'], n,
+                                         reldiff=reldiff)
+    fates_diffs['model'] = 'FATES'
+    fates_diffs['parameter'] = fates_diffs.index
+
+    clm_sub = clm_diffs[clm_diffs.index.isin(fatesclm_diffs.parameter)]
+    fates_clm_diff = pd.concat([fatesclm_diffs, clm_sub])
+    fates_diffs = pd.concat([fatesclm_diffs, fates_diffs])
+
+    return clm_diffs, fates_diffs, fates_clm_diff
+

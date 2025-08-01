@@ -57,8 +57,6 @@ _CATEGORY_COLORS = {
     'biophysics': '#8B008B',
     'stomatal': '#008B00',
     'biogeochemistry': '#8B5A2B',
-    'land use': '#FFA500',
-    'fire': '#B22222'
 }
 
 _CATEGORY_LABELS = {
@@ -90,6 +88,24 @@ _SUBCATEGORY_LABELS = {
         'soil water': 'Soil hydraulics',
         'snow': 'Snow',
         'thermal': 'Soil thermal properties',
+}
+
+_BIOME_NAMES = {
+    0.0: 'Ice sheet',
+    1.0: 'Tropical rain forest',
+    2.0: "Tropical seasonal forest/savanna",
+    3.0: "Subtropical desert",
+    4.0: "Temperate rain forest",
+    5.0: "Temperate seasonal forest",
+    6.0: "Woodland/shrubland",
+    7.0: "Temperate grassland/desert",
+    8.0: "Boreal forest",
+    9.0: "Tundra",
+}
+
+_MODEL_COLS = {
+    'FATES':'#2066a8',
+    'CLM': '#ea801c',
 }
 
 def wrap_labels(labels, width=20):
@@ -503,7 +519,8 @@ def round_down(number: float, decimals: int = 0) -> float:
     return int(number * multiplier) / multiplier
 
 
-def plot_two_model_diff(da1, da2, ds1_name, ds2_name, fates_var, units, cmap):
+def plot_two_model_diff(da1, da2, ds1_name, ds2_name, fates_var, units, cmap,
+                        diverging=False, plot_type='abs'):
 
     vmin = np.min([da1.min().values, da2.min().values])
     vmax = np.max([da1.max().values, da2.max().values])
@@ -513,11 +530,11 @@ def plot_two_model_diff(da1, da2, ds1_name, ds2_name, fates_var, units, cmap):
     for idx, ax in enumerate(axes):
         if idx == 0:
             pcm = map_function(
-                ax, da2, ds2_name, cmap, vmin, vmax, diverging_cmap=False
+                ax, da2, ds2_name, cmap, vmin, vmax, diverging_cmap=diverging
             )
         elif idx == 2:
             pcm = map_function(
-                ax, da1, ds1_name, cmap, vmin, vmax, diverging_cmap=False
+                ax, da1, ds1_name, cmap, vmin, vmax, diverging_cmap=diverging
             )
         elif idx == 1:
             diff = da2 - da1
@@ -531,12 +548,15 @@ def plot_two_model_diff(da1, da2, ds1_name, ds2_name, fates_var, units, cmap):
                 diverging_cmap=True,
             )
     cbar1 = figure.colorbar(pcm, ax=axes[2], shrink=1, orientation="vertical")
-    cbar1.set_label(f"{fates_var} ({units})", size=10, fontweight="bold")
-
     cbar2 = figure.colorbar(pcmdiff, ax=axes[1], shrink=1, orientation="horizontal")
-    cbar2.set_label(f"{fates_var} Difference ({units})", size=10, fontweight="bold")
-
-    figure.suptitle(f"Comparison for {fates_var}")
+    if plot_type == 'diff':
+        cbar1.set_label(f"Difference in {fates_var} ({units})", size=10, fontweight="bold")
+        cbar2.set_label(f"Delta Difference ({units})", size=10, fontweight="bold")
+        
+    else:
+        cbar1.set_label(f"Difference in {fates_var} ({units})", size=10, fontweight="bold")
+        cbar2.set_label(f"{fates_var} Difference ({units})", size=10, fontweight="bold")
+        
 
 
 def plot_month_of_max_diff(da1, da2, ds1_name, ds2_name, fates_var):
@@ -855,7 +875,34 @@ def plot_pft_grids(ds: xr.Dataset, pft_names: list[str], title: str):
     cbar.set_ticklabels([pft.replace("_", " ") for pft in pft_names])
     plt.title(title)
     
-def plot_oaat_params(param_dat: pd.DataFrame, model: str):
+def param_col_graph(ax, pivot):
+    
+    legend_elements = {}
+    for _, row in pivot.iterrows():
+    
+        y = row['y']
+        category = row['category']
+        fates_val = row.get('FATES', 0)
+        clm_val = row.get('CLM', 0)
+        color = _CATEGORY_COLORS.get(category, '#cccccc')
+
+        if fates_val > 0:
+            ax.barh(y, fates_val, color=color)
+            t = ax.text(fates_val - 0.5, y, str(int(fates_val)), va='center', ha='center', 
+                    fontsize=12, c='white', weight='bold')
+            t.set_bbox(dict(facecolor=color, alpha=1, edgecolor=color))
+            legend_elements[category] = Patch(facecolor=color, label=category)
+
+        if clm_val > 0:
+            ax.barh(y, clm_val, left=fates_val, color=color, hatch='///')
+            t = ax.text(fates_val + clm_val - 0.5, y, str(int(clm_val)), va='center', ha='center', 
+                    fontsize=12, c='white', weight='bold')
+            t.set_bbox(dict(facecolor=color, alpha=1, edgecolor=color))
+            legend_elements[category] = Patch(facecolor=color, label=category)
+
+    return legend_elements
+
+def plot_model_oaat(ax, param_dat: pd.DataFrame, model: str):
     """Plots a column graph of number of parameters in OAAT ensemble
 
     Args:
@@ -889,30 +936,7 @@ def plot_oaat_params(param_dat: pd.DataFrame, model: str):
     pivot['y'] = pivot['subcategory_label'].map(subcategory_to_y)
     pivot = pivot.sort_values('y')
 
-    sns.set_theme(style="whitegrid")    
-    legend_elements = {}
-    fig, ax = plt.subplots(figsize=(10, 10))
-    for _, row in pivot.iterrows():
-    
-        y = row['y']
-        category = row['category']
-        fates_val = row.get('FATES', 0)
-        clm_val = row.get('CLM', 0)
-        color = _CATEGORY_COLORS.get(category, '#cccccc')
-
-        if fates_val > 0:
-            ax.barh(y, fates_val, color=color)
-            t = ax.text(fates_val - 0.5, y, str(int(fates_val)), va='center', ha='center', 
-                    fontsize=12, c='white', weight='bold')
-            t.set_bbox(dict(facecolor=color, alpha=1, edgecolor=color))
-            legend_elements[category] = Patch(facecolor=color, label=category)
-
-        if clm_val > 0:
-            ax.barh(y, clm_val, left=fates_val, color=color, hatch='///')
-            t = ax.text(fates_val + clm_val - 0.5, y, str(int(clm_val)), va='center', ha='center', 
-                    fontsize=12, c='white', weight='bold')
-            t.set_bbox(dict(facecolor=color, alpha=1, edgecolor=color))
-            legend_elements[category] = Patch(facecolor=color, label=category)
+    legend_elements = param_col_graph(ax, pivot)
     
     # add clm and fates parameters
     legend_elements['CLM parameters'] = Patch(facecolor='white', edgecolor='black', hatch='///', label='CLM parameters')
@@ -926,16 +950,25 @@ def plot_oaat_params(param_dat: pd.DataFrame, model: str):
     ax.set_xlabel('Number of Parameters')
     ax.set_ylabel('')
     ax.set_title(f'{model} Parameters')
+
+    return legend_elements
+
+def plot_oaat_params(param_dat_fates: pd.DataFrame, model_fates: str, param_dat_clm: pd.DataFrame, model_clm: str):
+    sns.set_theme(style="whitegrid")    
+    fig, axes = plt.subplots(1, 2, figsize=(20, 10))
     
+    legend_elements = plot_model_oaat(axes[0], param_dat_clm, model_clm)
+    legend_elements = plot_model_oaat(axes[1], param_dat_fates, model_fates)
+
     handles = legend_elements.values()
     labels = [_CATEGORY_LABELS.get(label, label) for label in legend_elements.keys()]
-    ax.legend(
+    axes[1].legend(
         handles=handles,
         labels=labels,
         title=None,
         loc='lower center',
-        bbox_to_anchor=(0.5, -0.25),
-        ncol=2
+        bbox_to_anchor=(1.2, 0.5),
+        ncol=1
     )
     plt.tight_layout()
 
@@ -1073,6 +1106,8 @@ def _plot_top_n(ax, ds, default, variable, biome_label=None):
     ax.invert_yaxis()
     ax.grid(True, linestyle='--', alpha=0.5)
     
+
+    
 def plot_top_n(ds, default, variable, ylabel, units, xmin=None, xmax=None, by_biomes=False):
     
     if by_biomes:
@@ -1084,8 +1119,10 @@ def plot_top_n(ds, default, variable, ylabel, units, xmin=None, xmax=None, by_bi
         # determine grid size
         ncols = 3
         nrows = math.ceil(n_biomes/ncols)
+        start_of_last_row = (nrows - 1) * ncols
+        bottom_row_indices = range(start_of_last_row, nrows * ncols)
         
-        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 5 * nrows), 
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(20, 5 * nrows), 
                                  sharex=False)
         axes = axes.flatten()
         
@@ -1093,12 +1130,14 @@ def plot_top_n(ds, default, variable, ylabel, units, xmin=None, xmax=None, by_bi
             
             biome_default = default.sel(biome=biome)
             biome_ds = ds[ds.biome == biome]
-            _plot_top_n(axes[i], biome_ds, biome_default, variable, biome)
+            
+            _plot_top_n(axes[i], biome_ds, biome_default, variable, _BIOME_NAMES[biome])
+            if i in bottom_row_indices:
+                axes[i].set_xlabel(f'{ylabel} ({units})')
     
     else:
         
         fig, ax = plt.subplots(1, 1, figsize=(10, 6))
-        #ax = fig.add_axes([0.3, 0.1, 0.6, 0.8]) 
         _plot_top_n(ax, ds, default, variable)
     
     
@@ -1243,7 +1282,7 @@ def plot_params(default_param_data, param_ds, parameter):
         ax.axhline(y=sub_def, color='r', linestyle='--')
     plt.suptitle(parameter)
     
-def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, units,
+def plot_variable_variance(ax, ds1, ds2, ds1_name, ds2_name, variable, long_name, units,
                            obs=None):
     
     both = pd.concat([ds1, ds2])
@@ -1255,35 +1294,46 @@ def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variable, long_name, un
     ds2_mean_val = ds2[variable].mean()
     ds2_yerr = np.array([ds2_mean_val - ds2[variable].min(),
                         ds2[variable].max() - ds2_mean_val])
+    g = sns.stripplot(data=both, x="model", y=variable,
+                      hue="category", jitter=True, dodge=True, 
+                      alpha=0.7, ax=ax,
+                      palette=_CATEGORY_COLORS)
 
-    g = sns.catplot(data=both, x="model", y=variable,
-                hue="category", kind='strip', jitter=True,
-                dodge=True, height=5, aspect=0.8, alpha=0.7,
-            palette=_CATEGORY_COLORS)
-
-    plt.errorbar(x=[ds1_name], y=ds1_mean_val,
+    ax.errorbar(x=[ds1_name], y=ds1_mean_val,
                 yerr=[[ds1_yerr[0]], [ds1_yerr[1]]],
                 fmt='o', color='black', ecolor='black',
                 capsize=15)
 
-    plt.errorbar(x=[ds2_name], y=ds2_mean_val,yerr=[[ds2_yerr[0]], [ds2_yerr[1]]],
+    ax.errorbar(x=[ds2_name], y=ds2_mean_val,yerr=[[ds2_yerr[0]], [ds2_yerr[1]]],
                 fmt='o', color='black', ecolor='black',
                 capsize=15)
     
     if obs is not None:
-        plt.axhline(obs, color='red', linestyle='--')
+        ax.axhline(obs, color='red', linestyle='--')
 
+    ax.set_xlabel(None)
+    ax.set_ylabel(f"{long_name} ({units})")
+    
+def plot_ensemble_variance(ds1, ds2, ds1_name, ds2_name, variables, var_dict,
+                           obs=None):
 
-    handles = g._legend.legend_handles
-    labels = [text.get_text() for text in g._legend.texts]
-    g._legend.remove()
-    g.ax.figure.set_size_inches(6, 7)
+    handles, labels = None, None
+    fig, axes = plt.subplots(1, len(variables), figsize=(4*len(variables), 10), sharex=True)
+    for i, variable in enumerate(variables):
+        plot_variable_variance(axes[i], ds1, ds2, ds1_name, ds2_name,
+                       variable, var_dict[variable]['long_name'],
+                               var_dict[variable]['global_units'],
+                               obs=obs)
 
-    plt.legend(handles, [_CATEGORY_LABELS[label] for label in labels],
-            title='Parameter Grouping', bbox_to_anchor=(1.15, 0.7), loc='upper left',
-            borderaxespad=0.)
-    plt.xlabel(None)
-    plt.ylabel(f"{long_name} ({units})")
+        # collect legend once
+        if handles is None:  
+            handles, labels = axes[i].get_legend_handles_labels()
+        # remove individual legend
+        axes[i].legend_.remove()
+        
+    fig.legend(handles, [_CATEGORY_LABELS.get(lbl, lbl) for lbl in labels],
+               title='Parameter Grouping', bbox_to_anchor=(1.02, 0.5),
+               loc='center left', borderaxespad=0.)
     plt.tight_layout()
     
 def plot_sample(ensemble, obs_mean, obs_sd, pft_id, var, units):
@@ -1359,4 +1409,144 @@ def plot_pft_matrix(fates_to_clm, clm_index_to_name):
     plt.xlabel("CLM PFTs")
     plt.ylabel("FATES PFTs")
     plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    
+def plot_cumulative_variance(variables, variances, var_dict):
+
+    n_vars = len(variables)
+    ncols = 2
+    nrows = (n_vars + 1) // 2
+    
+    fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 4 * nrows), sharex=False)
+    
+    for idx, variable in enumerate(variables):
+        row = idx // ncols
+        col = idx % ncols
+        ax = axs[row, col] if nrows > 1 else axs[col]
+    
+        width = 1.5
+        fates_cumvar = variances[variable]['FATES']
+        clm_cumvar = variances[variable]['CLM']
+        ax.bar(fates_cumvar.nparams[:10] - width/2, fates_cumvar[:10], width=width, label='FATES')
+        ax.bar(clm_cumvar.nparams[:10] + width/2, clm_cumvar[:10], width=width, label='CLM', hatch='///')
+    
+        ax.set_ylim([0, 1])
+        ax.set_xticks(clm_cumvar.nparams[:10])
+        ax.set_title(var_dict[variable]['long_name'])
+    
+    fig.text(0.5, 0.04, '# of parameters', ha='center', va='center', fontsize=12)
+    fig.text(0.04, 0.5, 'Fraction of total variance', ha='center', va='center',
+             rotation='vertical', fontsize=12)
+    
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles, labels,
+        loc='lower center',
+        bbox_to_anchor=(0.5, -0.02),
+        ncol=2,
+        frameon=False
+    )
+    plt.tight_layout(rect=[0.05, 0.08, 1, 1])
+    
+def plot_var_diff(df, variable, tol, long_name, units=None, param_sub=None, include_sd=False):
+
+    if param_sub is not None:
+        df = df[df.index.isin(param_sub)]
+
+    if units is None:
+        units = "%"
+        type = "Percent"
+    else:
+        type = "Absolute"
+
+    if include_sd:
+        var_name = f"{variable}_mean"
+        df[f"{variable}_se"] = 2.0*df[f"{variable}_sd"]/np.sqrt(20)
+    else:
+        var_name = variable
+    
+    # filter out parameters below tolerence
+    below_tol = df.groupby('parameter')[var_name].apply(lambda g: (g <= tol).all().all())
+    params_to_keep = below_tol[~below_tol].index
+    df_filtered = df[df['parameter'].isin(params_to_keep)]
+    
+    # sort parameters by magnitude
+    sorted_params = df_filtered.groupby('parameter')[var_name].mean().sort_values(ascending=True).index.tolist()
+
+    # get the unique models
+    models = df_filtered['model'].unique()
+    bar_height = 0.35
+
+    plt.figure(figsize=(9, 10))
+    ax = plt.gca()
+    
+    # offset bars for each model
+    for i, model in enumerate(models):
+        subset = df_filtered[df_filtered['model'] == model].set_index('parameter').reindex(sorted_params)
+        
+        # Position bars vertically based on parameter index
+        y_positions = np.arange(len(sorted_params)) + (i - 0.5) * bar_height
+
+        ax.barh(
+            y=y_positions,
+            width=subset[var_name],
+            height=bar_height,
+            label=model,
+            xerr=subset[f"{variable}_se"] if include_sd else None,
+            color=_MODEL_COLS[model],
+            capsize=4,
+            alpha=0.9,
+            edgecolor='black'
+        )
+
+        # set y-ticks to parameter names
+        ax.set_yticks(np.arange(len(sorted_params)))
+        ax.set_yticklabels(sorted_params)
+
+        plt.xlabel(f"{type} Difference in {long_name} ({units})")
+        plt.ylabel('Parameter')
+        plt.legend(loc='lower right')
+        plt.tight_layout()
+    
+    
+def plot_2_top_n(ds1, ds2, default1, default2, variable, ylabel, units):
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    _plot_top_n(axes[0], ds1, default1, variable)
+    _plot_top_n(axes[1], ds2, default2, variable)
+    
+    axes[0].set_xlabel(f'{ylabel} ({units})')
+    axes[1].set_xlabel(f'{ylabel} ({units})')
+    axes[0].set_ylabel('Parameter')
+    axes[0].set_title('FATES')
+    axes[1].set_title('CLM')
+    
+    # create custom legend handles for categories
+    category_handles = [
+        mlines.Line2D([], [], marker='o', color='w', markerfacecolor=color, markersize=10, label=category)
+        for category, color in _CATEGORY_COLORS.items()
+    ]
+    max_value_handle = mlines.Line2D([], [], marker='o', color='w', markerfacecolor='black', 
+                                     markersize=9, label='Max Value')
+    min_value_handle = mlines.Line2D([], [], marker='o', color='w', markerfacecolor='none',
+                                     markeredgecolor='black',
+                                     markersize=8, markeredgewidth=1, label='Min Value')
+    
+    default_line_handle = mlines.Line2D(
+        [0], [0], color='black', linestyle='--', linewidth=1, label='Default Value'
+    )
+    
+    # Combine the category legend and the min/max markers into one legend
+    handles = [max_value_handle, min_value_handle, default_line_handle] + category_handles
+    labels = ['Max parameter', 'Min parameter', 'Default'] + [_CATEGORY_LABELS[label] for label in list(_CATEGORY_COLORS.keys())]
+    
+    handles = handles[:3] + [mlines.Line2D([], [], color='white')] + handles[3:]
+    labels = labels[:3] + [''] + labels[3:]
+    
+    fig.legend(
+        handles=handles,
+        labels=labels,
+        loc='upper left',
+        bbox_to_anchor=(0.99, 0.99),
+        frameon=False
+    )
     plt.tight_layout()
