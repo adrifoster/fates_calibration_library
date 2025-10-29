@@ -196,7 +196,7 @@ def post_process_ds(
 
     # assign default values if not there
     sparse = run_dict.get("sparse", True)
-    filter_nyears = run_dict.get("filter_nyears", None)
+    filter_years = run_dict.get("filter_years", None)
 
     # read in dataset and calculate/convert units on some variables
     ds = get_clm_ds(
@@ -212,13 +212,9 @@ def post_process_ds(
         ds["biome_name"] = whittaker_ds.biome_name
 
     # filter on years
-    if filter_nyears is not None:
-        mod_years = np.unique(ds.time.dt.year)
-        last_n = mod_years[-filter_nyears:]
-        ds = ds.sel(time=slice(f"{last_n[0]}-01-01", f"{last_n[-1]}-12-31"))
+    if filter_years is not None:
+        ds = ds.sel(time=slice(f"{filter_years[0]}-01-01", f"{filter_years[-1]}-12-31"))
         ds["time"] = xr.cftime_range(str(years[0]), periods=len(ds.time), freq="MS")
-
-    ds = ds.sel(time=slice(f"{years[0]}-01-01", f"{years[1]}-12-31"))
 
     return ds
 
@@ -325,10 +321,10 @@ def post_process_ensemble(
                 keys_finished.append(ensemble)
 
     # also write out default simulation
-    tag = "_".join(dirs[0].split("_")[:-1])
-    out_file = os.path.join(run_dict["postp_dir"], f"{tag}_000.nc")
+    out_file = os.path.join(run_dict["postp_dir"], f"{run_dict['tag']}000.nc")
     if os.path.isfile(out_file) and not run_dict.get("clobber", False):
         print(f"File {out_file} for default simulation exists, skipping")
+        keys_finished.append(0)
     else:
         ds_default = post_process_ds(
             os.path.join(run_dict["default_dir"], "lnd", "hist"),
@@ -339,29 +335,128 @@ def post_process_ensemble(
         )
         ds_default["ensemble"] = 0
         ds_default.to_netcdf(out_file)
+        keys_finished.append(0)
     return keys_finished
 
-
-def compile_global_ensemble(
-    run_dict, out_vars, var_dict, sparse_grid, sparse_land_area, global_land_area
-):
-
-    # read in ensemble and re-chunk for faster analysis
+def aggregate_ensembles(run_dict, out_vars, var_dict, sparse_grid, sparse_land_area,
+                       global_land_area):
+    
+    out_dir = os.path.join(run_dict["postp_dir"], 'aggregated')
+    os.makedirs(out_dir, exist_ok=True)
+    
     files = sorted(
         [
             os.path.join(run_dict["postp_dir"], f)
-            for f in os.listdir(run_dict["postp_dir"])
+            for f in os.listdir(run_dict["postp_dir"]) if f.endswith('.nc')
         ]
     )
-    ensemble_ds = xr.open_mfdataset(
-        files, combine="nested", concat_dim=["ensemble"], parallel=True
-    )
-    ensemble_ds = ensemble_ds.chunk({"gridcell": 20, "ensemble": 20, "time": 20})
-    
+    for file in files:
+        
+        tag = os.path.basename(file).replace('.nc', '')
+        ds = xr.open_dataset(file)
+        
+        # calculate monthly and annual means
+        annual_means = get_annual_means(ds, out_vars, var_dict)
+        monthly_means = get_monthly_means(ds, out_vars, var_dict)
+        
+        # remap annual means to whole globe
+        annual_maps_filename = os.path.join(
+            out_dir, f'{tag}_annual_maps.nc'
+        )
+        if os.path.isfile(annual_maps_filename) and not run_dict.get("clobber", False):
+            print(f"File {annual_maps_filename} exists, skipping")
+        else:
+            annual_maps = get_sparse_maps(
+                annual_means.mean(dim="year"), sparse_grid, out_vars, ensemble=False
+            )
+            annual_maps['ensemble'] = ds.ensemble
+            annual_maps.to_netcdf(annual_maps_filename)
+            
+        # calculate zonal means (i.e. by latitude)
+        zonal_means_filename = os.path.join(
+            out_dir, f'{tag}_zonal_means.nc'
+        )
+        if os.path.isfile(zonal_means_filename) and not run_dict.get("clobber", False):
+            print(f"File {zonal_means_filename} exists, skipping")
+        else:
+            zonal_means = apply_to_vars(
+                annual_maps,
+                out_vars,
+                func=calculate_zonal_mean,
+                add_sparse=False,
+                land_area=global_land_area,
+                conversion_factor={
+                    var: var_dict[var]["area_conversion_factor"] for var in out_vars
+                },
+            )
+            zonal_means['ensemble'] = ds.ensemble
+            zonal_means.to_netcdf(zonal_means_filename)
+            
+        # get climatology
+        climatology_filename = os.path.join(
+            out_dir, f'{tag}_climatology.nc'
+        )
+        if os.path.isfile(climatology_filename) and not run_dict.get("clobber", False):
+            print(f"File {climatology_filename} exists, skipping")
+        else:
+            climatology = get_sparse_area_means(
+                monthly_means, "global", out_vars, var_dict, sparse_land_area, ds.biome,
+            )
+            climatology['ensemble'] = ds.ensemble
+            climatology.to_netcdf(climatology_filename)
+            
+        # get area means
+        area_means_filename = os.path.join(
+            out_dir, f'{tag}_area_means.nc'
+        )
+        if os.path.isfile(area_means_filename) and not run_dict.get("clobber", False):
+            print(f"File {area_means_filename} exists, skipping")
+        else:
+            area_means = get_sparse_area_means(
+                annual_means, "global", out_vars, var_dict, sparse_land_area, ds.biome
+            )
 
+            # get mean and iav of area means and concat
+            area_means_mean = area_means.mean(dim="year")
+            area_means_iav = area_means.var(dim="year")
+
+            area_means_out = xr.concat(
+                [area_means_mean, area_means_iav], dim="summation_var", data_vars="all"
+            )
+            area_means_out = area_means_out.assign_coords(
+                summation_var=("summation_var", ["mean", "iav"])
+            )
+            area_means_out['ensemble'] = ds.ensemble
+            area_means_out.to_netcdf(area_means_filename)
+            
+        biome_area_means_filename = os.path.join(
+            out_dir, f'{tag}_biome_area_means.nc'
+        )
+        if os.path.isfile(biome_area_means_filename) and not run_dict.get("clobber", False):
+            print(f"File {biome_area_means_filename} exists, skipping")
+        else:
+            biome_area_means = get_sparse_area_means(
+                annual_means, "biome", out_vars, var_dict, sparse_land_area, ds.biome
+            )
+
+            # get mean and iav of area means and concat
+            biome_area_means_mean = biome_area_means.mean(dim="year")
+            biome_area_means_iav = biome_area_means.var(dim="year")
+
+            biome_area_means_out = xr.concat(
+                [biome_area_means_mean, biome_area_means_iav], dim="summation_var", data_vars="all"
+            )
+            biome_area_means_out = biome_area_means_out.assign_coords(
+                summation_var=("summation_var", ["mean", "iav"])
+            )
+            biome_area_means_out['ensemble'] = ds.ensemble
+            biome_area_means_out.to_netcdf(biome_area_means_filename)
+        
+def get_annual_means(ds, out_vars, var_dict):
+    
     # calculate annual means
     annual_means = apply_to_vars(
-        ensemble_ds,
+        ds,
         out_vars,
         func=calculate_annual_mean,
         add_sparse=True,
@@ -381,10 +476,13 @@ def compile_global_ensemble(
     annual_means["ASA"] = fsr/fsds
     annual_means["EF"] = le/(sh + le)
     
+    return annual_means
+
+def get_monthly_means(ds, out_vars, var_dict):
     
     # calculate monthly means
     monthly_means = apply_to_vars(
-        ensemble_ds,
+        ds,
         out_vars,
         func=calculate_monthly_mean,
         add_sparse=True,
@@ -392,98 +490,67 @@ def compile_global_ensemble(
             var: var_dict[var]["time_conversion_factor"] for var in out_vars
         },
     )
+    return monthly_means
+
+def compile_by_tag(dir, tag, remove_biome=False):
     
-    biome = ensemble_ds.isel(ensemble=0).biome.drop_vars("ensemble")
-
-    # remap annual means to whole globe
-    annual_maps_filename = os.path.join(
-        run_dict["out_dir"], f'{run_dict["ensemble_name"]}_annual_maps.nc'
+    files = sorted([os.path.join(dir, f) for f in os.listdir(dir) if f.endswith(tag)])
+    if remove_biome:
+        files = [f for f in files if not f.endswith('biome_area_means.nc')]
+    ensemble_ds = xr.open_mfdataset(
+        files, combine="nested", concat_dim=["ensemble"], parallel=True
     )
-    if os.path.isfile(annual_maps_filename) and not run_dict.get("clobber", False):
-        print(f"File {annual_maps_filename} exists, skipping")
+    return ensemble_ds
+    
+def compile_global_ensemble(run_dict):
+
+    aggregated_dir = os.path.join(run_dict['postp_dir'], 'aggregated')
+    
+    # annual maps
+    file_name = os.path.join(run_dict['out_dir'], 
+                             f"{run_dict['ensemble_name']}_annual_maps.nc")
+    if os.path.isfile(file_name) and not run_dict.get("clobber", False):
+        print(f"File {file_name} exists, skipping")
     else:
-        annual_maps = get_sparse_maps(
-            annual_means.mean(dim="year"), sparse_grid, out_vars, ensemble=True
-        )
-        annual_maps.to_netcdf(annual_maps_filename)
-
-    # calculate zonal means (i.e. by latitude)
-    zonal_means_filename = os.path.join(
-        run_dict["out_dir"], f'{run_dict["ensemble_name"]}_zonal_means.nc'
-    )
-    if os.path.isfile(zonal_means_filename) and not run_dict.get("clobber", False):
-        print(f"File {zonal_means_filename} exists, skipping")
+        annual_maps = compile_by_tag(aggregated_dir, 'annual_maps.nc')
+        annual_maps.to_netcdf(file_name)
+    
+    # area means
+    file_name = os.path.join(run_dict['out_dir'], 
+                             f"{run_dict['ensemble_name']}_area_means.nc")
+    if os.path.isfile(file_name) and not run_dict.get("clobber", False):
+        print(f"File {file_name} exists, skipping")
     else:
-        zonal_means = apply_to_vars(
-            annual_maps,
-            out_vars,
-            func=calculate_zonal_mean,
-            add_sparse=False,
-            land_area=global_land_area,
-            conversion_factor={
-                var: var_dict[var]["area_conversion_factor"] for var in out_vars
-            },
-        )
-        zonal_means.to_netcdf(zonal_means_filename)
-
-    # get climatology
-    climatology_filename = os.path.join(
-        run_dict["out_dir"], f'{run_dict["ensemble_name"]}_climatology.nc'
-    )
-    if os.path.isfile(climatology_filename) and not run_dict.get("clobber", False):
-        print(f"File {climatology_filename} exists, skipping")
+        annual_maps = compile_by_tag(aggregated_dir, 'area_means.nc', remove_biome=True)
+        annual_maps.to_netcdf(file_name)
+    
+    # biome area means
+    file_name = os.path.join(run_dict['out_dir'], 
+                             f"{run_dict['ensemble_name']}_biome_area_means.nc")
+    if os.path.isfile(file_name) and not run_dict.get("clobber", False):
+        print(f"File {file_name} exists, skipping")
     else:
-        climatology = get_sparse_area_means(
-            monthly_means, "global", out_vars, var_dict, sparse_land_area, biome
-        )
-        climatology.to_netcdf(climatology_filename)
-        
-    # get area means
-    area_means_filename = os.path.join(
-        run_dict["out_dir"], f'{run_dict["ensemble_name"]}_area_means.nc'
-    )
-    if os.path.isfile(area_means_filename) and not run_dict.get("clobber", False):
-        print(f"File {area_means_filename} exists, skipping")
+        annual_maps = compile_by_tag(aggregated_dir, 'biome_area_means.nc')
+        annual_maps.to_netcdf(file_name)
+    
+    # climatology
+    file_name = os.path.join(run_dict['out_dir'], 
+                             f"{run_dict['ensemble_name']}_climatology.nc")
+    if os.path.isfile(file_name) and not run_dict.get("clobber", False):
+        print(f"File {file_name} exists, skipping")
     else:
-        area_means = get_sparse_area_means(
-            annual_means, "global", out_vars, var_dict, sparse_land_area, biome
-        )
-
-        # get mean and iav of area means and concat
-        area_means_mean = area_means.mean(dim="year")
-        area_means_iav = area_means.var(dim="year")
-
-        area_means_out = xr.concat(
-            [area_means_mean, area_means_iav], dim="summation_var", data_vars="all"
-        )
-        area_means_out = area_means_out.assign_coords(
-            summation_var=("summation_var", ["mean", "iav"])
-        )
-        area_means_out.to_netcdf(area_means_filename)
-        
-    biome_area_means_filename = os.path.join(
-        run_dict["out_dir"], f'{run_dict["ensemble_name"]}_biome_area_means.nc'
-    )
-    if os.path.isfile(biome_area_means_filename) and not run_dict.get("clobber", False):
-        print(f"File {biome_area_means_filename} exists, skipping")
+        annual_maps = compile_by_tag(aggregated_dir, 'climatology.nc')
+        annual_maps.to_netcdf(file_name)
+    
+    # zonal means
+    file_name = os.path.join(run_dict['out_dir'], 
+                             f"{run_dict['ensemble_name']}_zonal_means.nc")
+    if os.path.isfile(file_name) and not run_dict.get("clobber", False):
+        print(f"File {file_name} exists, skipping")
     else:
-        biome_area_means = get_sparse_area_means(
-            annual_means, "biome", out_vars, var_dict, sparse_land_area, biome
-        )
-
-        # get mean and iav of area means and concat
-        biome_area_means_mean = biome_area_means.mean(dim="year")
-        biome_area_means_iav = biome_area_means.var(dim="year")
-
-        biome_area_means_out = xr.concat(
-            [biome_area_means_mean, biome_area_means_iav], dim="summation_var", data_vars="all"
-        )
-        biome_area_means_out = biome_area_means_out.assign_coords(
-            summation_var=("summation_var", ["mean", "iav"])
-        )
-        biome_area_means_out.to_netcdf(biome_area_means_filename)
-
-
+        annual_maps = compile_by_tag(aggregated_dir, 'zonal_means.nc')
+        annual_maps.to_netcdf(file_name)
+    
 def compile_pft_ensemble(
     run_dict, out_vars, var_dict
 ):

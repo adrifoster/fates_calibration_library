@@ -9,13 +9,15 @@ from collections import defaultdict
 
 from fates_calibration_library.analysis_functions import compute_infl, get_start_end_slopes
 
-def get_fates_param_dat(fates_param_list_file: str, oaat_key: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def get_fates_param_dat(fates_param_list_file: str, oaat_key: pd.DataFrame,
+                        to_xarray=True) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns pandas DataFrames with information about FATES parameters associated with a 
     one-at-a-time ensemble
 
     Args:
         fates_param_list_file (str): path to FATES parameter list file (excel)
         oaat_key (pd.DataFrame): one-at-a-time ensemble key
+        to_xarray (optional, bool): whether or not to converto xarray dataset. Defaults to True
 
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]: data about all parameters and just those 
@@ -31,35 +33,46 @@ def get_fates_param_dat(fates_param_list_file: str, oaat_key: pd.DataFrame) -> t
         "smpsc_delta": "fates_nonhydro_smpsc"
     })
 
-    param_dat_oaat = param_dat[param_dat.fates_parameter_name.isin(np.unique(oaat_key.parameter_name))]
-
     # merge with key
     param_info = pd.merge(
-        param_dat_oaat[['fates_parameter_name', 'category', 'subcategory']],
+        param_dat[['fates_parameter_name', 'long_name', 'category', 'subcategory']],
         oaat_key,
         left_on="fates_parameter_name",
         right_on="parameter_name",
-        how="inner"
     )
     param_info = param_info.drop(columns=["fates_parameter_name"])
-    param_info = param_info.set_index("ensemble").to_xarray()
+    
+    if to_xarray:
+        param_info = param_info.set_index("ensemble").to_xarray()
 
     return param_info
 
-def get_clm_param_dat(param_list):
+def get_clm_param_dat(param_info_file, param_key, to_xarray=True):
     
-    not_in = [180, 181, 306, 307, 308, 309, 312, 313, 314,
-          315, 316, 317, 318, 319, 320, 321, 322, 323,
-          324, 325, 326, 327, 328, 329, 330, 331, 332,
-          333]
     
-    clm_param_dat = pd.read_csv(param_list)
-    clm_param_dat.columns = ['parameter_name', 'ensemble', 'type', 'category', 'subcategory']
-    clm_param_dat.ensemble = [int(e.replace('CLM6SPoaat', '')) for e in clm_param_dat.ensemble]
-    clm_param_dat = clm_param_dat[~clm_param_dat.ensemble.isin(not_in)]
-    clm_param_dat = clm_param_dat.set_index("ensemble").to_xarray()
+    param_dat = pd.read_csv(param_info_file, index_col=[0]).drop(columns=['min', 'max', 'location']).drop_duplicates()
+    param_dat.columns = ['parameter_name', 'long_name', 'category', 'subcategory']
 
-    return clm_param_dat
+    param_info = pd.merge(
+        param_dat,
+        param_key,
+        on="parameter_name",
+    )
+    param_info.ensemble = [int(str(e).replace('CLM6SPoaat', '')) for e in param_info.ensemble]
+    if to_xarray:
+        param_info = param_info.set_index("ensemble").to_xarray()
+
+    return param_info
+
+def get_all_parameters(clm_param_dat, fates_param_dat):
+    clm_param = clm_param_dat.to_pandas().reset_index().drop(columns=['type', 'ensemble']).drop_duplicates()
+    clm_param['model'] = 'CLM'
+
+    fates_param = fates_param_dat.to_pandas().reset_index().drop(columns=['type', 'ensemble']).drop_duplicates()
+    fates_param['model'] = 'FATES'
+
+    return pd.concat([clm_param, fates_param])
+
 
 def get_differences(ds: xr.Dataset, out_vars: list[str], default: xr.Dataset) -> xr.Dataset:
     """Gets differences between the default and the ensemble member for all input variables
@@ -85,7 +98,7 @@ def get_differences(ds: xr.Dataset, out_vars: list[str], default: xr.Dataset) ->
     return diff
 
 def get_area_means_diffs(file: str, param_info: xr.Dataset, out_vars: list[str], 
-                         default_ind: int=0) -> xr.Dataset:
+                         default_ind: int=0, remove_vars: list[str]=None) -> xr.Dataset:
     """Gets the sum of all differences between mean and iav for across all history variables
     for each ensemble member
 
@@ -94,12 +107,14 @@ def get_area_means_diffs(file: str, param_info: xr.Dataset, out_vars: list[str],
         param_info (xr.Datset): data frame with information about parameters
         out_vars (list[str]): list of output variables
         default_ind (int, optional): index of default simulation. Defaults to 0.
+        remove_vars (list[str], optional): list of variables to remove from ensemble. Defaults to None.
 
     Returns:
         xr.Dataset: output dataset with differences
     """
     
     ds = xr.open_dataset(file)
+    ds['WUE'] = ds['GPP']/ds['QVEGT'].where(ds.QVEGT > 0.0)
     default_mean = ds.sel(ensemble=default_ind).sel(summation_var='mean')
     default_iav = ds.sel(ensemble=default_ind).sel(summation_var='iav')
     mean_vals = ds.sel(summation_var='mean')
@@ -113,8 +128,34 @@ def get_area_means_diffs(file: str, param_info: xr.Dataset, out_vars: list[str],
 
     ds['sum_diff'] = mean_sum_diff + mean_iav_diff
     ds = xr.merge([ds, param_info])
+    
+    if remove_vars is not None:
+        ds = ds.where(~ds.parameter_name.isin(remove_vars), drop=True)
+        
+    ds_mean = ds.sel(summation_var='mean')
+    ds_iav = ds.sel(summation_var='iav')
 
-    return ds
+    return ds, ds_mean, ds_iav
+
+def get_biome_df(biome_ds, model):
+    biomes = biome_ds.biome.values
+    biome_diffs = []
+    for biome in biomes:
+        df = get_min_max_diff(biome_ds.sel(biome=biome), model)
+        df['biome'] = biome
+        biome_diffs.append(df)
+    return pd.concat(biome_diffs)
+
+def get_biome_top_n(biome_ds, biome_df, variable, n=10):
+    biomes = biome_ds.biome.values
+    topns = []
+    for biome in biomes:
+        biome_mean = biome_ds.sel(biome=biome)
+        diff_df = biome_df[biome_df.biome == biome]
+        top_n = get_top_n(biome_mean, diff_df, variable, n, biome_mean.sel(ensemble=0))
+        top_n['biome'] = biome
+        topns.append(top_n)
+    return pd.concat(topns)
 
 def get_combined(ds1, ds2, name1, name2):
 
@@ -125,7 +166,18 @@ def get_combined(ds1, ds2, name1, name2):
     
     return xr.concat([ds1, ds2_shifted], dim="ensemble")
 
-def get_min_max_diff(ds: xr.Dataset) -> pd.DataFrame:
+def get_active_ensemble_df(clm_ds, fates_ds):
+    clm_active_ens = clm_ds.where(clm_ds.sum_diff > 0.0, drop=True)
+    clm_active_ens = clm_active_ens.to_pandas().reset_index().drop(columns=['ensemble'])
+    clm_active_ens['model'] = 'CLM'
+
+    fates_active_ens = fates_ds.where(fates_ds.sum_diff > 0.0, drop=True)
+    fates_active_ens = fates_active_ens.to_pandas().reset_index().drop(columns=['ensemble'])
+    fates_active_ens['model'] = 'FATES'
+
+    return pd.concat([clm_active_ens, fates_active_ens])
+
+def get_min_max_diff(ds: xr.Dataset, model: str) -> pd.DataFrame:
     """Gets differences between min and max ensemble members for all variables
 
     Args:
@@ -138,7 +190,7 @@ def get_min_max_diff(ds: xr.Dataset) -> pd.DataFrame:
 
     # we don't want to look at these data variables
     skip_vars = ['parameter_name', 'type', 'category', 'subcategory', 'sum_diff',
-                 'sim_source']
+                 'sim_source', 'long_name']
     vars_to_check = [v for v in ds.data_vars if v not in skip_vars]
     
     default_ds = ds.where(ds.ensemble == 0, drop=True)
@@ -174,6 +226,8 @@ def get_min_max_diff(ds: xr.Dataset) -> pd.DataFrame:
 
     df_diffs = pd.DataFrame.from_dict(diffs, orient='index')
     df_diffs.index.name = 'parameter_name'
+    df_diffs['parameter'] = df_diffs.index
+    df_diffs['model'] = model
 
     return df_diffs
 
@@ -220,6 +274,7 @@ def get_top_n(ds: xr.Dataset, df_diffs: pd.DataFrame, variable: str, n: int,
             'parameter_name': param,
             'min_val': min_run[variable].item(),
             'max_val': max_run[variable].item(),
+            'default': default_ds[variable].item(),
             'difference': max_run[variable].item() - min_run[variable].item(),
             'category': category,
             'subcategory': subcategory
@@ -269,23 +324,68 @@ def get_ensemble_slopes(ds, fates_param_dat,
     
     return slope_start_ds, slope_end_ds
 
+def classify_params(all_params, nonzero_params):
+    
+    clm_only_params = all_params[all_params.parameter_name.isin(nonzero_params['clm_only'])].copy()
+    clm_only_params['type'] = 'CLM only'
+
+    fates_only_params = all_params[all_params.parameter_name.isin(nonzero_params['fates_only'])].copy()
+    fates_only_params['type'] = 'FATES only'
+
+    common_params = all_params[all_params.parameter_name.isin(nonzero_params['common'])].copy()
+    common_params['type'] = 'common'
+
+    return pd.concat([clm_only_params, fates_only_params, common_params])
+
 def get_nonzero_params(ds, var='sum_diff'):
     return np.unique(ds.where(ds[var] > 0.0, drop=True).parameter_name.values)
 
+def count_parameters(param_key):
+    param_key = param_key[param_key.type != 'default']
+    return len(param_key.parameter_name.unique())
+
+def count_if_PFT_independent(param_key, param_dat, FATES=True):
+    
+    param_key = param_key[param_key.type != 'default']
+    params = param_key.parameter_name.unique()
+
+    pft_dim = 'fates_pft' if FATES else 'pft'
+
+    pft_params = []
+    global_params = []
+    for parameter in params:
+        if parameter in param_dat.data_vars:
+            if pft_dim in param_dat[parameter].dims:
+                pft_params.append(parameter)
+            else:
+                global_params.append(parameter)
+        else:
+            global_params.append(parameter)
+
+    return len(pft_params)*16 + len(global_params)
+
 def get_params(fates_ds, fates_clm_ds, clm_ds, var='sum_diff'):
     
-    fates_only_parameters = get_nonzero_params(fates_ds, var=var)
-    fates_clm_parameters = get_nonzero_params(fates_clm_ds, var=var)
-    clm_parameters = get_nonzero_params(clm_ds, var=var)
+    fates_fates_nonzero = get_nonzero_params(fates_ds, var=var)
+    fates_clm_nonzero = get_nonzero_params(fates_clm_ds, var=var)
+    clm_nonzero = get_nonzero_params(clm_ds, var=var)
     
-    clm_only_parameters = [param for param in clm_parameters if param not in fates_clm_parameters]
-    shared_parameters = [param for param in clm_parameters if param in fates_clm_parameters]
+    all_nonzero = np.unique(np.append(np.append(fates_fates_nonzero, fates_clm_nonzero), 
+                                      clm_nonzero))
+    
+    fates_only_parameters = np.append([param for param in fates_clm_nonzero if param not in clm_nonzero],
+                                      fates_fates_nonzero)
+    
+    clm_only_parameters = [param for param in clm_nonzero if param not in fates_clm_nonzero]
+    shared_parameters = [param for param in clm_nonzero if param in fates_clm_nonzero]
 
-    out_dict = {'fates_only': fates_only_parameters,
-                'fates_clm': fates_clm_parameters,
-                'clm_parameters': clm_parameters,
+    out_dict = {'fates': fates_fates_nonzero,
+                'fates_clm': fates_clm_nonzero,
+                'clm': clm_nonzero,
                 'clm_only': clm_only_parameters,
-                'shared': shared_parameters}
+                'fates_only': fates_only_parameters,
+                'common': shared_parameters,
+                'all_nonzero': all_nonzero}
     
     return out_dict
 
@@ -402,14 +502,14 @@ def get_vardiff(da, baseline_dat, variables, params, n, reldiff=False, include_s
                 var_max = da.isel(ensemble=0)
             
             if reldiff:
-                var_diff = np.abs(var_max.sel(summation_var='mean')[variable].values - var_min.sel(summation_var='mean')[variable].values)/baseline_dat.sel(summation_var='mean')[variable].values*100.0
+                var_diff = (var_max.sel(summation_var='mean')[variable].values - var_min.sel(summation_var='mean')[variable].values)/baseline_dat.sel(summation_var='mean')[variable].values*100.0
                 sd_diff = np.sqrt(var_max.sel(summation_var='iav')[variable].values/n + var_min.sel(summation_var='iav')[variable].values/n)/baseline_dat.sel(summation_var='mean')[variable].values*100.0
             else:
-                var_diff = np.abs(var_max.sel(summation_var='mean')[variable].values - var_min.sel(summation_var='mean')[variable].values)
+                var_diff = (var_max.sel(summation_var='mean')[variable].values - var_min.sel(summation_var='mean')[variable].values)
                 sd_diff = np.sqrt(var_max.sel(summation_var='iav')[variable].values/n + var_min.sel(summation_var='iav')[variable].values/n)
             
-            diff = var_diff[0]
-            diff_sd = sd_diff[0]
+            diff = np.atleast_1d(var_diff)[0]
+            diff_sd = np.atleast_1d(sd_diff)[0]
             var_diffs[param][variable] = diff
             var_sds[param][variable] = diff_sd
             
@@ -468,15 +568,18 @@ def get_S1diff(da, baseline_dat, variables, params, diff_df, reldiff=False):
 
 def get_param_variance(parameters, variable, ds, default_ind):
     
-    default = ds.isel(ensemble=default_ind).sel(summation_var='mean')
+    default = ds.isel(ensemble=default_ind)
     
     variances = []
     for parameter in parameters:
-        this_par = ds.where(ds.parameter_name == parameter, drop=True).sel(summation_var='mean')
+        
+        this_par = ds.where(ds.parameter_name == parameter, drop=True)
+        
         if (this_par.type == 'min').any():
             min_par = this_par.where(this_par.type == 'min', drop=True)
         else:
             min_par = default
+        
         if (this_par.type == 'max').any():
             max_par = this_par.where(this_par.type == 'max', drop=True)
         else:
@@ -493,6 +596,15 @@ def get_cumulative_variance(df, parameters, param_chunks):
     chunks = xr.DataArray(param_chunks + param_chunks*np.floor(np.arange(len(parameters))/param_chunks),
                           dims='parameter_name', name='nparams')
     return df['variance'].sortby(df['variance'], ascending=False).groupby(chunks).sum().cumsum(dim='nparams')/df['variance'].sum()
+
+def find_cumulative_params(params, variable, df, cutoff=0.9):
+    variance_df = get_param_variance(params, variable, df, 0)
+    variance_df = variance_df.sort_values(by='variance', ascending=False).reset_index()
+    variance_df['cum_sum'] = variance_df.variance.cumsum() / variance_df.variance.sum()
+
+    mask = variance_df.cum_sum >= cutoff
+    first_true = mask.idxmax()
+    return variance_df.iloc[:(first_true+1)]['parameter_name'].values
 
 def get_categorical_cumulative_variance(df, param_info, parameters, param_chunks):
     
@@ -518,12 +630,18 @@ def get_ensemble_ranges(ensemble_df, vars):
     min_vals = {}
     diff = {}
     stds = {}
+    variance = {}
+    q1s = {}
+    q3s = {}
     for variable in vars:
         mean_vals[variable] = ensemble_df[variable].mean()
         max_vals[variable] = ensemble_df[variable].max()
         min_vals[variable] = ensemble_df[variable].min()
         stds[variable] = ensemble_df[variable].std()
+        variance[variable] = ensemble_df[variable].var()
         diff[variable] = np.abs(ensemble_df[variable].max() - ensemble_df[variable].min())
+        q1s[variable] = ensemble_df[variable].quantile(0.25)
+        q3s[variable] = ensemble_df[variable].quantile(0.75)
     
     df = pd.DataFrame({
         'mean': mean_vals,
@@ -531,23 +649,36 @@ def get_ensemble_ranges(ensemble_df, vars):
         'min': min_vals,
         'range': diff,
         'std': stds,
+        'variance': variance,
+        'q1': q1s,
+        'q3': q3s,
     })
     df['variable'] = df.index
     df['CV'] = df['std']/df['mean']
+    df['iqr'] = df['q3'] - df['q1']
     
     return df
 
-def print_ensemble_range(df, model, variable, units):
-    min_val = df[variable].min()
-    max_val = df[variable].max()
-    mean_val = df[variable].mean()
-    diff = np.abs(max_val - min_val)
-    print(f'{model} {variable} ranges from', round(min_val, 1),
-          'to', round(max_val, 1), units)
-    print('This is a range of ', round(diff, 1), units)
-    print('And a mean of ', round(mean_val, 1), units)
+def print_ensemble_range(df,  model, variable, units):
+    
+    var_df = df[df.variable == variable]
+    mod_df = var_df[var_df.model == model]
+    
+    print(f'{model} {variable} ranges from', 
+          round(mod_df['min'].values[0], 2), 'to', 
+          round(mod_df['max'].values[0], 2), units)
+    
+    print('This is a range of ', round(mod_df['range'].values[0], 2), units)
+    print('And a mean of ', round(mod_df['mean'].values[0], 2), units)
+    print('And a standard devaiation of ', round(mod_df['std'].values[0], 2), units)
+    print('And a variance of ', round(mod_df['variance'].values[0], 2), units)
+    print('And an IQR of ', round(mod_df['iqr'].values[0], 2), units)
 
-def get_both_ranges(fates_ensemble, clm_ensemble, vars):
+def get_both_ranges(active_df, vars):
+    
+    fates_ensemble = active_df[active_df.model == 'FATES']
+    clm_ensemble = active_df[active_df.model == 'CLM']
+    
     fates_df = get_ensemble_ranges(fates_ensemble, vars)
     fates_df['model'] = 'FATES'
 
@@ -578,7 +709,7 @@ def get_all_cumulative_variance(variables, clm_pars, clm_glob, fates_pars, fates
 
 def get_number_required(df, model, variable, tol=0.9):
     arr = df[variable][model].values
-    return np.argmax(arr > tol)
+    return np.argmax(arr >= tol)
 
 def get_all_required(df, vars, tol=0.9):
 
@@ -654,23 +785,23 @@ def get_param_count_summary(top10_params_by_variable, output_groups):
 
     return summary_df
 
-def get_all_vardiffs(variables, clmbtran_mean, fatesclm_mean, fates_mean,
+def get_all_vardiffs(variables, clm_ds, fatesclm_ds, fates_ds,
                      nonzero_params, n, reldiff=False):
     
-    clm_diffs = get_vardiff(clmbtran_mean, clmbtran_mean.sel(ensemble=0),
-                                variables, nonzero_params['clm_parameters'], n,
+    clm_diffs = get_vardiff(clm_ds, clm_ds.sel(ensemble=0),
+                                variables, nonzero_params['clm'], n,
                                 reldiff=reldiff)
     clm_diffs['model'] = 'CLM'
     clm_diffs['parameter'] = clm_diffs.index
     
-    fatesclm_diffs = get_vardiff(fatesclm_mean, fatesclm_mean.sel(ensemble=0),
+    fatesclm_diffs = get_vardiff(fatesclm_ds, fatesclm_ds.sel(ensemble=0),
                                      variables, nonzero_params['fates_clm'], n,
                                      reldiff=reldiff)
     fatesclm_diffs['model'] = 'FATES'
     fatesclm_diffs['parameter'] = fatesclm_diffs.index
 
-    fates_diffs = get_vardiff(fates_mean, fates_mean.sel(ensemble=0),
-                                         variables, nonzero_params['fates_only'], n,
+    fates_diffs = get_vardiff(fates_ds, fates_ds.sel(ensemble=0),
+                                         variables, nonzero_params['fates'], n,
                                          reldiff=reldiff)
     fates_diffs['model'] = 'FATES'
     fates_diffs['parameter'] = fates_diffs.index
@@ -681,3 +812,97 @@ def get_all_vardiffs(variables, clmbtran_mean, fatesclm_mean, fates_mean,
 
     return clm_diffs, fates_diffs, fates_clm_diff
 
+def get_parameter_data(parameter, fates_maps, fate_clm_maps, clm_maps, nonzero_params):
+    if parameter in nonzero_params['fates_only']:
+        dat_fates = fates_maps.where(fates_maps.parameter_name == parameter, drop=True)
+        dat_clm = None
+    elif parameter in nonzero_params['fates_clm']:
+        dat_fates = fate_clm_maps.where(fate_clm_maps.parameter_name == parameter, drop=True)
+        dat_clm = clm_maps.where(clm_maps.parameter_name == parameter, drop=True)
+    else:
+        dat_clm = clm_maps.where(clm_maps.parameter_name == parameter, drop=True)
+        dat_fates = None
+
+    return dat_fates, dat_clm
+
+def get_compare_df(clm_reldiffs, fates_reldiffs, clm_parameters, fates_parameters):
+    
+    clm_sub = clm_reldiffs[clm_reldiffs.parameter.isin(clm_parameters)].reset_index().drop(columns=['index'])
+    fates_sub = fates_reldiffs[fates_reldiffs.parameter.isin(fates_parameters)].reset_index().drop(columns=['index'])
+    
+    both_sub = pd.concat([clm_sub, fates_sub]).melt(id_vars=['model', 'parameter'])
+    both_sub[['base_var', 'stat']] = both_sub['variable'].str.extract(r'(.*)_(mean|sd)')
+    df_wide = both_sub.pivot_table(index=['model', 'base_var', 'parameter'], columns='stat', values='value').reset_index()
+    df_wide.columns.name = None
+    df_wide = df_wide.rename(columns={'mean': 'mean_value', 'sd': 'sd_value', 'base_var': 'variable'})
+
+    return df_wide
+
+def get_compare_df_3(clm_reldiffs, fates_reldiffs, fates_reldiffs2, fates_reldiffs3, 
+                     clm_parameters, fates_parameters):
+    
+    clm_sub = clm_reldiffs[clm_reldiffs.parameter.isin(clm_parameters)].reset_index().drop(columns=['index'])
+    fates_sub = fates_reldiffs[fates_reldiffs.parameter.isin(fates_parameters)].reset_index().drop(columns=['index'])
+    fates_sub2 = fates_reldiffs2[fates_reldiffs2.parameter.isin(fates_parameters)].reset_index().drop(columns=['index'])
+    fates_sub3 = fates_reldiffs3[fates_reldiffs3.parameter.isin(fates_parameters)].reset_index().drop(columns=['index'])
+    
+    both_sub = pd.concat([clm_sub, fates_sub, fates_sub2, fates_sub3]).melt(id_vars=['model', 'parameter'])
+    both_sub[['base_var', 'stat']] = both_sub['variable'].str.extract(r'(.*)_(mean|sd)')
+    df_wide = both_sub.pivot_table(index=['model', 'base_var', 'parameter'], columns='stat', values='value').reset_index()
+    df_wide.columns.name = None
+    df_wide = df_wide.rename(columns={'mean': 'mean_value', 'sd': 'sd_value', 'base_var': 'variable'})
+
+    return df_wide
+
+def get_extra_simulations(hist_dir, fname_fates, fates_param_dat, variables, default_index,
+                          special_vars, clm_glob):
+    fates_glob_all, _, _ = get_area_means_diffs(os.path.join(hist_dir, fname_fates),
+                                                      fates_param_dat, variables, default_index)
+    
+    fates_glob_subset = fates_glob_all.where(fates_glob_all.parameter_name.isin(np.append(special_vars, 'default')), drop=True)
+    clm_subset = clm_glob.where(clm_glob.ensemble.isin([0, 364, 365, 366, 367, 378, 379, 380, 381, 386, 387, 388, 389]), drop=True)
+    
+    clm_diffs = get_vardiff(clm_subset, clm_subset.sel(ensemble=0),
+                                variables, ['jmaxha', 'jmaxhd', 'jmaxse_sf', 'vcmaxha', 'vcmaxhd', 'vcmaxse_sf'], 20,
+                                reldiff=True)
+    clm_diffs['model'] = 'CLM'
+    clm_diffs['parameter'] = clm_diffs.index
+    
+    fates_diffs = get_vardiff(fates_glob_subset, fates_glob_subset.sel(ensemble=289),
+                                variables, special_vars, 20,
+                                reldiff=True)
+    fates_diffs['model'] = 'FATES'
+    fates_diffs['parameter'] = fates_diffs.index
+
+    return fates_diffs, clm_diffs
+    
+def get_pct_diff(active_df, variable, default_ds, tol=1.0):
+    default_value = default_ds[variable].values
+    pct_diff = (active_df[variable] - default_value)/default_value*100
+    all_len = len(active_df[variable])
+    above_tol = len(pct_diff[pct_diff >= 1])
+    return above_tol/all_len*100.0, above_tol
+
+
+def create_combined_mini_oaat_data(variable, fates_glob_combo_mean2, fates_meandiffs2,
+                                  fates_glob_combo_mean3, fates_meandiffs3, fates_glob_combo_mean,
+                                  fates_meandiffs_sub, clm_mean, clm_meandiffs_sub, 
+                                  corresponding_params):
+
+    fates_top10_2 = get_top_n(fates_glob_combo_mean2, fates_meandiffs2,
+                                   variable, 10, fates_glob_combo_mean2.sel(ensemble=0))
+    fates_top10_2['version'] = 'CLM-FATES parameter update'
+    fates_top10_3 = get_top_n(fates_glob_combo_mean3, fates_meandiffs3, variable,
+                                 10, fates_glob_combo_mean3.sel(ensemble=0))
+    fates_top10_3['version'] = 'CLM-FATES parameter & water stress update'
+    fates_top10_sub = get_top_n(fates_glob_combo_mean, fates_meandiffs_sub, variable,
+                                 10, fates_glob_combo_mean.sel(ensemble=0))
+    fates_top10_sub['version'] = 'CLM-FATES standard configuration'
+    clm_top10_sub = get_top_n(clm_mean, clm_meandiffs_sub, variable,
+                                 10, clm_mean.sel(ensemble=0))
+    clm_top10_sub['version'] = 'CLM'
+    
+    all_top = pd.concat([fates_top10_2, fates_top10_3, fates_top10_sub, clm_top10_sub])
+    all_top['analagous_parameter'] = all_top['parameter_name'].map(corresponding_params).fillna(all_top['parameter_name'])
+
+    return all_top

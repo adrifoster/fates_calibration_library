@@ -254,12 +254,12 @@ def compute_annual_precip(rain_kg_m2_s: xr.DataArray, snow_kg_m2_s: xr.DataArray
     precip.attrs["units"] = "mm/year"
     return precip
                                      
-def plot_whittaker_biomes(whit_ds, lats=None, lons=None):
+def plot_whittaker_biomes(whit_ds, lats=None, lons=None, height=6, width=12):
 
     colors, names = get_biome_palette()
     cmap = matplotlib.colors.ListedColormap(list(colors.values()))
 
-    figure, axes = generate_subplots(1)
+    figure, axes = generate_subplots(1, height=height, width=width)
     pcm = map_function(axes[0], whit_ds, None, cmap, -0.5, 9.5)
     cbar = figure.colorbar(pcm, ax=axes[0], fraction=0.03, orientation="vertical")
     if lats is not None:

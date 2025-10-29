@@ -74,4 +74,4 @@ cd "${case_name}" || { echo "ERROR: Failed to change directory to ${case_name}";
 ./case.setup
 ./xmlchange PROJECT="${CHARGENUM}"
 
-# ./case.submit -a "-l place=group=rack"
+./case.submit -a "-l place=group=rack"
