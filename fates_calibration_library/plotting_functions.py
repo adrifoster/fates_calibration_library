@@ -7,6 +7,7 @@ import xarray as xr
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -971,7 +972,7 @@ def plot_oaat_params(all_params: pd.DataFrame, nonzero_params: dict):
     
     clm_only_params = all_params[all_params.parameter_name.isin(nonzero_params['clm_only'])].copy()
     clm_only_params['type'] = 'CLM only'
-
+    
     fates_only_params = all_params[all_params.parameter_name.isin(nonzero_params['fates_only'])].copy()
     fates_only_params['type'] = 'FATES only'
 
@@ -1107,7 +1108,7 @@ def plot_area_means(ds, default_ind, sum_var, variable, ylabel, units,
     plt.tight_layout()
     
     
-def _plot_top_n(ax, ds, default, variable, biome_label=None):
+def _plot_top_n(ax, ds, default, variable, biome_label=None, obs_range=None):
     
     ds['parameter_name'] = [name.replace('fates_', '') for name in ds['parameter_name']]
     # loop through the rows of the sorted dataframe
@@ -1146,6 +1147,10 @@ def _plot_top_n(ax, ds, default, variable, biome_label=None):
             label=None,
             zorder=2
         )
+        
+    if obs_range is not None:
+        ax.axvspan(obs_range[0], obs_range[1],
+                    color='gray', alpha=0.1, zorder=0)
     
     ax.axvline(x=default[variable].mean().values, color='k', linestyle='--', linewidth=1)
     
@@ -1366,7 +1371,7 @@ def plot_params(default_param_data, param_ds, parameter):
     
 def plot_variable_variance(ax, ds1, ds2, ds1_name, ds2_name, ds1_default,
                            ds2_default, variable, long_name, units,
-                           obs=None):
+                           obs_range=None):
     
     both = pd.concat([ds1, ds2])
     
@@ -1385,14 +1390,15 @@ def plot_variable_variance(ax, ds1, ds2, ds1_name, ds2_name, ds1_default,
     ax.errorbar(x=[ds1_name], y=ds1_mean_val,
                 yerr=[[ds1_yerr[0]], [ds1_yerr[1]]],
                 fmt='o', color='black', ecolor='black',
-                capsize=15)
+                capsize=15, markersize=8)
 
     ax.errorbar(x=[ds2_name], y=ds2_mean_val,yerr=[[ds2_yerr[0]], [ds2_yerr[1]]],
                 fmt='o', color='black', ecolor='black',
-                capsize=15)
+                capsize=15, markersize=8)
     
-    if obs is not None:
-        ax.axhline(obs, color='red', linestyle='--')
+    if obs_range is not None:
+        ax.axhspan(obs_range[0], obs_range[1],
+                   color='gray', alpha=0.15, zorder=0)
 
     ax.tick_params(labelsize=14)
     ax.set_xlabel(None, fontsize=14)
@@ -1400,7 +1406,7 @@ def plot_variable_variance(ax, ds1, ds2, ds1_name, ds2_name, ds1_default,
     
 def plot_ensemble_variance(active_df, ds1_name, ds2_name, ds1_default, ds2_default,
                            variables, var_dict,
-                           obs=None, width=10, height=7):
+                           obs_range=None, width=10, height=7):
     
     ds1 = active_df[active_df.model == 'FATES'].copy()
     ds1['model_name'] = 'CLM-FATES'
@@ -1412,18 +1418,19 @@ def plot_ensemble_variance(active_df, ds1_name, ds2_name, ds1_default, ds2_defau
                              figsize=(width, height),
                              sharex=True)
     for i, variable in enumerate(variables):
+        obs = obs_range[i] if obs_range is not None else None
         plot_variable_variance(axes[i], ds1, ds2, ds1_name, ds2_name,
                                ds1_default, ds2_default,
                        variable, var_dict[variable]['long_name'],
                                var_dict[variable]['global_units'],
-                               obs=obs)
-
+                               obs_range=obs)
         # collect legend once
         if handles is None:  
             handles, labels = axes[i].get_legend_handles_labels()
         # remove individual legend
         axes[i].legend_.remove()
         label = string.ascii_lowercase[i]
+                
         axes[i].text(
             -0.13, 1.04, f"({label})",
             transform=axes[i].transAxes,
@@ -1432,12 +1439,23 @@ def plot_ensemble_variance(active_df, ds1_name, ds2_name, ds1_default, ds2_defau
             va='top',
             ha='left'
         )
-        
+    
+    spacer_handle = mpatches.Rectangle((0, 0), 0, 0, fill=False, edgecolor='none', visible=False)
+    mean_proxy = mlines.Line2D([], [], color='black', marker='o', linestyle='None',
+                                markersize=8, label='mean & range')
+    handles.extend([spacer_handle, mean_proxy])
+    labels.extend(['', 'Ensemble Mean'])
+    
+    if obs_range is not None:
+        obs_proxy = mpatches.Patch(color='gray', alpha=0.15)
+        handles.extend([obs_proxy])
+        labels.extend(['Observational Range'])
         
     fig.legend(handles, [_CATEGORY_LABELS.get(lbl, lbl) for lbl in labels],
                title='Parameter Grouping', bbox_to_anchor=(1.02, 0.5),
                loc='center left', borderaxespad=0., fontsize=16,
                title_fontsize=16)
+    
     plt.tight_layout()
     
 def plot_sample(ensemble, obs_mean, obs_sd, pft_id, var, units):
@@ -1624,7 +1642,7 @@ def plot_var_diff(ax, df, variable, tol, long_name, units=None, param_sub=None, 
         ax.set_ylabel('Parameter')
     
     
-def plot_2_top_n(ds1, ds2, default1, default2, all_params, variable, ylabel, units):
+def plot_2_top_n(ds1, ds2, default1, default2, all_params, variable, ylabel, units, obs_range=None):
     
     ds1 = pd.merge(ds1, all_params[['parameter_name', 'type']])
     ds2 = pd.merge(ds2, all_params[['parameter_name', 'type']])
@@ -1633,8 +1651,8 @@ def plot_2_top_n(ds1, ds2, default1, default2, all_params, variable, ylabel, uni
     min_val = np.min([ds1['max_val'].min(), ds1['min_val'].min(), ds2['max_val'].min(), ds2['min_val'].min()])
     
     fig, axes = plt.subplots(1, 2, figsize=(12, 6), sharex=True)
-    _plot_top_n(axes[0], ds1, default1, variable)
-    _plot_top_n(axes[1], ds2, default2, variable)
+    _plot_top_n(axes[0], ds1, default1, variable, obs_range=obs_range)
+    _plot_top_n(axes[1], ds2, default2, variable, obs_range=obs_range)
     
     axes[0].set_xlabel(f'{ylabel} ({units})', fontsize=16)
     axes[1].set_xlabel(f'{ylabel} ({units})', fontsize=16)
@@ -1708,7 +1726,7 @@ def plot_multiple_compare_vars(df, fates_params, corresponding_params,
     df['analagous_parameter'] = [param.replace('fates_', '') for param in df['analagous_parameter']]
     
     
-    fig, axes = plt.subplots(2, 2, figsize=(15*0.7, 12*0.7))
+    fig, axes = plt.subplots(2, 2, figsize=(17*0.7, 14*0.7))
     axes = axes.flatten()
     for k, param in enumerate(param_order):
         df_sub = df[df.analagous_parameter == param]

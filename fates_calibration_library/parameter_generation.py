@@ -9,27 +9,38 @@ from scipy.stats import qmc
 # parameter information for parameter proxies
 PARAM_INFO = {
     "smpsc_delta": {
+        "param_type": "scale_from_root",
         "root_param": "fates_nonhydro_smpso",
         "actual_param": "fates_nonhydro_smpsc",
         "default_value": np.array([189000]),
     },
+    "fates_leaf_vcmax25top": {
+        "param_type": "array",
+        "actual_param": "fates_leaf_vcmax25top",
+        "array_index": 0,
+    },
     "fates_leaf_slamax": {
+        "param_type": "scale_from_root",
         "root_param": "fates_leaf_slatop",
         "actual_param": "fates_leaf_slamax",
         "default_value": np.array([0.0954]),
     },
     "fates_stoich_nitr_1": {
+        "param_type": "array",
         "actual_param": "fates_stoich_nitr",
         "array_index": 0
     },
     "fates_stoich_nitr_2": {
+        "param_type": "array",
         "actual_param": "fates_stoich_nitr",
         "array_index": 1
     },
     "fates_allom_agb": {
+        "param_type": "jags",
         "actual_param": ["fates_allom_agb1", "fates_allom_agb2"]
     },
     "fates_allom_d2bl": {
+        "param_type": "jags",
         "actual_param": ["fates_allom_d2bl1", "fates_allom_d2bl2"]
     }
 }

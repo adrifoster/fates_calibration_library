@@ -19,14 +19,16 @@ module load conda
 conda activate fates_calibration
 
 cd {script_dir}
-mpiexec -n {mpi} python {script_name} --pft {pft_id} --bootstraps {bootstraps} --out-dir {out_dir}
+mpiexec -n {mpi} python {script_name} --pft {pft_id} --bootstraps {bootstraps} --out-dir {out_dir} --config {config}
 """
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate PBS job scripts for FATES calibration.\n")
     parser.add_argument("--pfts", nargs="+", required=True,
-                        help="List of PFTs to run (e.g. BETT NEET C4G)\n")
-    parser.add_argument("--bootstraps", type=int, default=100,
+                        help="List of PFTs to run (e.g. 1 2 3 4)\n")
+    parser.add_argument("--config", type=str, required=True,
+                        help="Path to config file\n")
+    parser.add_argument("--bootstraps", type=int, default=1000,
                         help="Number of bootstrap runs per PFT\n")
     parser.add_argument("--script", type=str, default="calibrate_scipy.py",
                         help="Python script to execute\n")
@@ -86,7 +88,8 @@ def main():
             script_dir=args.script_dir,
             script_name=args.script,
             bootstraps=args.bootstraps,
-            out_dir=output_dir
+            out_dir=output_dir,
+            config=args.config
         )
 
         if args.dry_run:

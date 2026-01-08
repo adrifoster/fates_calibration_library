@@ -172,7 +172,7 @@ process_ensemble() {
     fi
   fi
 
-  #./case.submit -a "-l place=group=rack"
+  ./case.submit -a "-l place=group=rack"
 
 }
 

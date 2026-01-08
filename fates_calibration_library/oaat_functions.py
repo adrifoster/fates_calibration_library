@@ -878,10 +878,14 @@ def get_extra_simulations(hist_dir, fname_fates, fates_param_dat, variables, def
     
 def get_pct_diff(active_df, variable, default_ds, tol=1.0):
     default_value = default_ds[variable].values
-    pct_diff = (active_df[variable] - default_value)/default_value*100
-    all_len = len(active_df[variable])
-    above_tol = len(pct_diff[pct_diff >= 1])
-    return above_tol/all_len*100.0, above_tol
+    all_len = len(active_df.parameter_name.unique())
+    active_df['pct_diff'] = np.abs((active_df[variable] - default_value)/default_value*100)
+    
+    above_tol = active_df[active_df.pct_diff > tol]
+    params = above_tol.parameter_name.unique()
+    num_above = len(params)
+    
+    return num_above/all_len*100.0, num_above
 
 
 def create_combined_mini_oaat_data(variable, fates_glob_combo_mean2, fates_meandiffs2,

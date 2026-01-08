@@ -112,10 +112,10 @@ SW:
   models: [WangMao]
   var: sw
   long_name: soil water
-  convert_units: null
-  conversion_factor: null
+  convert_units: Pg yr-1
+  conversion_factor: 1.0E-06
   global_units: kg m$^{-2}$
-  lat_units: kg m$^{-2}$
+  lat_units: Pg yr$^{-1}$
   cmap: Blues
   diverging_cmap: False 
 
