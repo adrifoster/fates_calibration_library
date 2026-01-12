@@ -4,6 +4,7 @@ import xarray as xr
 import numpy as np
 import os
 import pandas as pd
+from scipy import stats
 from collections import Counter
 from collections import defaultdict
 
@@ -910,3 +911,13 @@ def create_combined_mini_oaat_data(variable, fates_glob_combo_mean2, fates_meand
     all_top['analagous_parameter'] = all_top['parameter_name'].map(corresponding_params).fillna(all_top['parameter_name'])
 
     return all_top
+
+def get_slope(df, varx, vary, model, category):
+    
+    df_model = df[df['model_name'] == model]
+    df_cat = df_model[df_model.category_subset == category]
+    x = df_cat[varx]
+    y = df_cat[vary]
+    slope, _, _, _, _ = stats.linregress(x, y)
+
+    return slope

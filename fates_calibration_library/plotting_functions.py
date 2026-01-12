@@ -1603,7 +1603,7 @@ def plot_var_diff(ax, df, variable, tol, long_name, units=None, param_sub=None, 
     # filter out parameters below tolerence
     below_tol = df.groupby('parameter')[var_name].apply(lambda g: (np.abs(g) <= tol).all().all())
     params_to_keep = below_tol[~below_tol].index
-    df_filtered = df[df['parameter'].isin(params_to_keep)]
+    df_filtered = df[df['parameter'].isin(params_to_keep)].copy()
     
     # sort parameters by magnitude
     df_filtered['abs_diff'] = np.abs(df_filtered[var_name])
@@ -1903,7 +1903,7 @@ def plot_top_n_sub(df, variable_name, units, ax, mv=1, default_line=True):
 def plot_all_mini_oaats(df_list, variables, units, mvs, default_line):
     version_order = ['CLM', 'CLM-FATES standard configuration', 'CLM-FATES parameter update', 'CLM-FATES parameter & water stress update']
 
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
+    fig, axes = plt.subplots(2, 2, figsize=(11, 7))
     axes = axes.flatten()
     for i, ax in enumerate(axes):
         plot_top_n_sub(df_list[i], variables[i], units[i], ax, mvs[i], default_line=default_line)
@@ -2086,3 +2086,114 @@ def plot_grid_maps(variables, fates_sparse_glob, fates_ann_means_glob,
         cbar = fig.colorbar(pcm, ax=axes[i, :], orientation="horizontal", shrink=0.5)
         cbar.set_label(f"$\Delta$ {var_dict[variable]['long_name']} (sparsegrid - fullgrid) ({var_dict[variable]['annual_units']})",
                        size=10, fontweight="bold")
+        
+def plot_relative_diffs(df, vars, var_dict, include_sd=True):
+    
+    fig, axes = plt.subplots(2, 1, figsize=(7, 12))
+    axes = axes.flatten()
+    plot_var_diff(axes[0], df, vars[0], 1, var_dict[vars[0]]['long_name'],
+                  include_sd=include_sd)
+    plot_var_diff(axes[1], df, vars[1], 1,
+                        var_dict[vars[0]]['long_name'],
+                        include_sd=include_sd)
+    axes[1].legend(loc='best')
+    for k in range(2):
+        label = string.ascii_lowercase[k]
+        axes[k].text(
+            -0.2, 1.01, f"({label})",
+            transform=axes[k].transAxes,
+            fontsize=14,
+            fontweight='bold',
+            va='top',
+            ha='left'
+        )
+    plt.tight_layout()
+
+def plot_scatter(df, fates_default, clm_default, in_vars, var_dict):
+    
+    # get FATES and CLM defaults
+    fates_default_var0 = fates_default[in_vars[0]].values
+    fates_default_var1 = fates_default[in_vars[1]].values
+    fates_default_var2 = fates_default[in_vars[2]].values
+    fates_default_var3 = fates_default[in_vars[3]].values
+    
+    clm_default_var0 = clm_default[in_vars[0]].values
+    clm_default_var1 = clm_default[in_vars[1]].values
+    clm_default_var2 = clm_default[in_vars[2]].values
+    clm_default_var3 = clm_default[in_vars[3]].values
+    
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    axes = axes.flatten()
+
+    # plot 1
+    sns.scatterplot(data=df, x=in_vars[0], y=in_vars[1],
+                    hue='model_name',
+                    hue_order=['CLM-FATES', 'CLM'],
+                    style='category_subset',
+                    palette=_MODEL_COLS,
+                    ax=axes[0])
+    axes[0].scatter(fates_default_var0, fates_default_var1, marker='*', s=200,
+                    color='#3B7D23', edgecolors='black')
+    axes[0].scatter(clm_default_var0, clm_default_var1, marker='*', s=200,
+                    color='#78206E', edgecolors='black')
+
+    # plot 2
+    sns.scatterplot(data=df, x=in_vars[2], y=in_vars[3],
+                    hue='model_name',
+                    style='category_subset',
+                    hue_order=['CLM-FATES', 'CLM'],
+                    palette=_MODEL_COLS,
+                    ax=axes[1])
+    axes[1].scatter(fates_default_var2, fates_default_var3, marker='*', s=200,
+                    color='#3B7D23', edgecolors='black')
+    axes[1].scatter(clm_default_var2, clm_default_var3, marker='*', s=200,
+                    color='#78206E', edgecolors='black')
+
+    handles, labels = axes[1].get_legend_handles_labels()
+    clean_handles_labels = [
+        (h, l) for h, l in zip(handles, labels)
+        if l not in ["model_name", "category_subset"]
+    ]
+
+    handles, labels = zip(*clean_handles_labels)
+    handles, labels = list(handles), list(labels)
+
+    default_star = mlines.Line2D([], [], color='none', marker='*', 
+                                markerfacecolor='black', markeredgecolor='black', 
+                                markersize=12, label='default')
+    handles.append(default_star)
+    labels.append('default')
+
+    legend = fig.legend(
+        handles, labels,
+        loc='lower center',
+        bbox_to_anchor=(0.2, -0.15),
+        ncol=2,
+        frameon=True
+    )
+    legend.set_title(None)
+
+    axes[0].set_xlabel(f"{var_dict[in_vars[0]]['long_name']} ({var_dict[in_vars[0]]['global_units']})")
+    axes[0].set_ylabel(f"{var_dict[in_vars[1]]['long_name']} ({var_dict[in_vars[1]]['global_units']})")
+    
+    axes[1].set_xlabel(f"{var_dict[in_vars[2]]['long_name']} ({var_dict[in_vars[2]]['global_units']})")
+    axes[1].set_ylabel(f"{var_dict[in_vars[3]]['long_name']} ({var_dict[in_vars[3]]['global_units']})")
+    
+    axes[0].get_legend().remove()
+    axes[1].get_legend().remove()
+
+    for k in range(2):
+        label = string.ascii_lowercase[k]
+        axes[k].text(
+            -0.2, 1.01, f"({label})",
+            transform=axes[k].transAxes,
+            fontsize=14,
+            fontweight='bold',
+            va='top',
+            ha='left'
+        )
+
+    for ax in axes:
+        ax.tick_params(axis='x', labelsize=12)
+    plt.tight_layout()
+    

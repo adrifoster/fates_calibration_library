@@ -903,3 +903,13 @@ def weighted_mean(ds: xr.Dataset, var: str):
     
     corrected_var = ds[var]*ds.land_frac
     return ((corrected_var*ds.land_area).sum(dim='gridcell'))/ds.land_area.sum(dim='gridcell')
+
+def get_mesh_points(mesh: xr.Dataset):
+
+    mesh = mesh.where(mesh.elementMask == 1, drop=True)
+    centerCoords = mesh.centerCoords.values
+    mesh_lats = [coord[1] for coord in centerCoords]
+    mesh_lons = [coord[0] for coord in centerCoords]
+    
+    return mesh_lats, mesh_lons
+

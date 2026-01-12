@@ -1106,3 +1106,33 @@ def extract_ilamb_obs(
 
     # return filtered df
     return filter_df(out_df, threshold_dict["filter_vars"], threshold_dict["tol"])
+
+def get_obs_min_max(ilamb_df, obs_config, var_name, y1=2000, y2=2014, land_area=None):
+    
+    ilamb_name = obs_config[var_name]['var']
+    obs = ilamb_df[f"{ilamb_name}_global"].where(ilamb_df.model.isin(obs_config[var_name]['models']), drop=True)
+    obs_yrs = obs.sel(year=slice(y1, y2))
+
+    if var_name == 'GPP':
+        cedar_data_file = '/glade/work/linnia/datasets/CEDAR/CEDAR_CFE-Hybrid_DTNT_2deg_2001-2020_c113025.nc'
+        cedar_data = xr.open_dataset(cedar_data_file)
+        cedar_annual_gpp = calculate_annual_mean(cedar_data['GPP'], 0.001).sel(year=slice(y1, y2)).compute()
+        cedar_annual_gpp = cedar_annual_gpp.rename({'latitude': 'lat', 'longitude': 'lon'})
+        cedar_area_mean = area_mean(
+            cedar_annual_gpp,
+             1.0e-6,
+            land_area,
+        )
+        cedar_area_mean['model'] = 'CEDAR'
+        obs_yrs = xr.concat([obs_yrs, cedar_area_mean], dim='model')
+        
+    obs_mean_by_year = obs_yrs.mean(dim='year')
+    
+    obs_min = obs_mean_by_year.min()
+    obs_max = obs_mean_by_year.max()
+    
+    return obs_min, obs_max
+
+def get_min_max(df, variable):
+    var_df = df[df.variable == variable]
+    return var_df.min_value.values[0], var_df.max_value.values[0]
