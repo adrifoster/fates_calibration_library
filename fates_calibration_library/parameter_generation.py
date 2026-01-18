@@ -194,8 +194,7 @@ def write_ensemble_list(param_prefix: str, ensembles: list[str], out_dir: str):
         ensembles (list[str]): list of ensembles
         out_dir (str): output directory to write file to
     """
-
-    file_names = [f"{param_prefix}_{ens}" for ens in ensembles]
+    file_names = [f"{ens}" for ens in ensembles]
     with open(os.path.join(out_dir, f"{param_prefix}.txt"), "w", encoding="utf-8") as f:
         for line in file_names:
             f.write(f"{line}\n")
@@ -292,6 +291,7 @@ def get_lh_values(
         change_str_max, default_value, param_dat, parameter, "param_max"
     )
     if 'fates_pft' in get_param_dims(main_param, parameter) and by_pft:
+        
         if isinstance(min_value, float):
             min_val_pft = np.full_like(root_value, min_value)
             max_val_pft = np.full_like(root_value, max_value)
@@ -300,21 +300,23 @@ def get_lh_values(
             min_val_pft = min_value
             max_val_pft = max_value
             default_val_pft = default_value
-            
+
         if 'fates_leafage_class' in get_param_dims(main_param, parameter):
             min_val_pft = min_val_pft.flatten()
             max_val_pft = max_val_pft.flatten()
             default_val_pft = default_val_pft.flatten()
+        
         if 'fates_plant_organs' in get_param_dims(main_param, parameter):
             min_val_pft = min_val_pft.flatten()
             max_val_pft = max_val_pft.flatten()
             default_val_pft = default_val_pft.flatten()
+        
         for i, pft in enumerate(pfts):
             param_value = unnormalize(lh_value[i], min_val_pft[pft-1], max_val_pft[pft-1])
             default_val_pft[pft-1] = param_value
-        return default_value
+            
+        return default_val_pft
     else:
-
         # create updated value from lh_value
         param_value = unnormalize(lh_value, min_value, max_value)
 
@@ -371,11 +373,10 @@ def set_default_pftvals(
     Returns:
         np.ndarray: output parameter values
     """
-
     for pft in keep_pfts:
         idx = pft - 1
         if param_value.ndim == 1:
-            param_value[idx] = default_value[idx]
+            param_value[idx] = default_value.flatten()[idx]
         elif param_value.ndim == 2:
             param_value[:, idx] = default_value[:, idx]
         else:
@@ -467,6 +468,9 @@ def set_lh_param_value(
         
         param_value = get_lh_values(value, param_dat, parameter, default_value, by_pft, pfts)
         ds_value = ds[actual_param_name].values.copy()
+        target_shape = ds_value.shape
+        param_value = param_value.reshape(target_shape)
+
         for i in range(len(param_value)):
             if i != PARAM_INFO[parameter]['array_index']:
                 param_value[i] = ds_value[i]
@@ -476,8 +480,7 @@ def set_lh_param_value(
         param_dict = sample_dict[parameter]
         param_value = get_sample_values(default_value, sample_i, param_dict, jags_dict, parameter, 
                                        actual_param_name)
-            
-
+    
     # set default pfts if they are supplied
     if len(keep_pfts) > 0 and "fates_pft" in dims and param_type != 'jags':
         param_value = set_default_pftvals(param_value, default_value, keep_pfts, dims)
@@ -487,6 +490,8 @@ def set_lh_param_value(
         for k, par in enumerate(actual_param_name):
             ds[par].values = param_value[k]
     else:
+        if 'fates_leafage_class' in dims:
+            param_value = param_value[np.newaxis, :]
         ds[actual_param_name].values = param_value
 
     return ds
@@ -593,7 +598,6 @@ def create_lh_param_ensemble(
         ds = default_param_data.copy(deep=False)
         
         if by_pft:
-            
             param_values = {}
             pft_size = len(pft_params) * num_pfts
             pft_section = sample[:pft_size]
@@ -616,7 +620,7 @@ def create_lh_param_ensemble(
                 
             # get information about this parameter
             sub = main_param[main_param.fates_parameter_name == params[j]]
-
+            
             # set parameter value for this parameter
             ds = set_lh_param_value(
                 ds,
@@ -636,7 +640,7 @@ def create_lh_param_ensemble(
             )
 
         # output to file
-        ds.to_netcdf(os.path.join(out_dir, f"{param_prefix}_{generate_suffix(i+1)}.nc"))
+        ds.to_netcdf(os.path.join(out_dir, f"{param_prefix}_{generate_suffix(i_sample+1)}.nc"))
 
     # write out the key and list of files
     lh_key = pd.DataFrame(lh_sample)
@@ -650,7 +654,9 @@ def create_lh_param_ensemble(
                 columns.append(param)
     else:
         columns = params
+        
     lh_key.columns = columns
+    
     lh_key["ensemble"] = [
         f"{param_prefix}_{generate_suffix(ens)}"
         for ens in np.arange(1, num_samples + 1)
