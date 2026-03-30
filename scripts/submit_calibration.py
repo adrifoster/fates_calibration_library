@@ -28,13 +28,13 @@ def parse_args():
                         help="List of PFTs to run (e.g. 1 2 3 4)\n")
     parser.add_argument("--config", type=str, required=True,
                         help="Path to config file\n")
-    parser.add_argument("--bootstraps", type=int, default=1000,
+    parser.add_argument("--bootstraps", type=int, default=100,
                         help="Number of bootstrap runs per PFT\n")
     parser.add_argument("--script", type=str, default="calibrate_scipy.py",
                         help="Python script to execute\n")
     parser.add_argument("--script-dir", type=str, default="/glade/work/afoster/FATES_calibration/fates_calibration_library/scripts",
                         help="Path to directory containing the script\n")
-    parser.add_argument("--output-base", type=str, default="/glade/work/afoster/FATES_calibration/parameter_outputs",
+    parser.add_argument("--output-base", type=str, default="/glade/work/afoster/FATES_calibration/param_outputs_history_matching",
                         help="Base output directory for PFT outputs\n")
     parser.add_argument("--job-dir", type=str, default="/glade/work/afoster/FATES_calibration/jobs",
                         help="Directory to write PBS job scripts\n")
@@ -42,9 +42,9 @@ def parse_args():
     # PBS/Compute resource options
     parser.add_argument("--walltime", type=str, default="12:00:00",
                         help="Walltime (HH:MM:SS)\n")
-    parser.add_argument("--mem", type=str, default="50G",
+    parser.add_argument("--mem", type=str, default="100G",
                         help="Memory allocation\n")
-    parser.add_argument("--mpi", type=int, default=16,
+    parser.add_argument("--mpi", type=int, default=2,
                         help="Number of MPI processes\n")
     parser.add_argument("--queue", type=str, default="casper",
                         help="PBS queue to submit to\n")

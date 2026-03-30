@@ -42,6 +42,10 @@ PARAM_INFO = {
     "fates_allom_d2bl": {
         "param_type": "jags",
         "actual_param": ["fates_allom_d2bl1", "fates_allom_d2bl2"]
+    },
+    "fates_leafn_vert_scaler": {
+        "param_type": "jags",
+        "actual_param": ["fates_leafn_vert_scaler_coeff1", "fates_leafn_vert_scaler_coeff2"]
     }
 }
 
@@ -283,7 +287,6 @@ def get_lh_values(
     # get min and max parameter values
     change_str_min = str(sub["param_min"].values[0])
     change_str_max = str(sub["param_max"].values[0])
-
     min_value = get_param_value(
         change_str_min, default_value, param_dat, parameter, "param_min"
     )
@@ -465,12 +468,12 @@ def set_lh_param_value(
         param_value = root_value + delta_value
         
     elif param_type == "array_index":
-        
+                
         param_value = get_lh_values(value, param_dat, parameter, default_value, by_pft, pfts)
         ds_value = ds[actual_param_name].values.copy()
         target_shape = ds_value.shape
         param_value = param_value.reshape(target_shape)
-
+        
         for i in range(len(param_value)):
             if i != PARAM_INFO[parameter]['array_index']:
                 param_value[i] = ds_value[i]
@@ -484,13 +487,13 @@ def set_lh_param_value(
     # set default pfts if they are supplied
     if len(keep_pfts) > 0 and "fates_pft" in dims and param_type != 'jags':
         param_value = set_default_pftvals(param_value, default_value, keep_pfts, dims)
-
+        
     # set the values
     if param_type == 'jags':
         for k, par in enumerate(actual_param_name):
             ds[par].values = param_value[k]
     else:
-        if 'fates_leafage_class' in dims:
+        if ('fates_leafage_class' in dims) and by_pft:
             param_value = param_value[np.newaxis, :]
         ds[actual_param_name].values = param_value
 
@@ -620,7 +623,7 @@ def create_lh_param_ensemble(
                 
             # get information about this parameter
             sub = main_param[main_param.fates_parameter_name == params[j]]
-            
+
             # set parameter value for this parameter
             ds = set_lh_param_value(
                 ds,
@@ -635,12 +638,13 @@ def create_lh_param_ensemble(
                 i_sample,
                 jags_dict,
                 sample_dict,
-                by_pft,
-                pfts
+                by_pft=by_pft,
+                pfts=None
             )
 
         # output to file
         ds.to_netcdf(os.path.join(out_dir, f"{param_prefix}_{generate_suffix(i_sample+1)}.nc"))
+        ds.close()
 
     # write out the key and list of files
     lh_key = pd.DataFrame(lh_sample)
@@ -709,9 +713,9 @@ def get_param_percent_change(
     """
     percent_change = get_percentage_change(change_str)
     if oaat_type == "param_min":
-        return (default_value - np.abs(default_value * (percent_change / 100.0))).values
+        return (default_value - np.abs(default_value * (percent_change / 100.0)))
     if oaat_type == "param_max":
-        return (default_value + np.abs(default_value * (percent_change / 100.0))).values
+        return (default_value + np.abs(default_value * (percent_change / 100.0)))
 
     print("Need to supply param_min or param_max")
     return None
@@ -801,6 +805,54 @@ def unnormalize(value, min_value, max_value):
     """
     return (max_value - min_value) * value + min_value
 
+def get_pft_info(pft, default_param_file, pft_ids):
+    
+    default_param = xr.open_dataset(default_param_file)
+    all_pfts = [str(pft).replace("b'", "").replace("'", "").strip() for pft in default_param.fates_pftname.values]
+    pft_name = all_pfts[pft-1]
+    pft_id = pft_ids[pft_name]
+    
+    return pft_name, pft_id
 
+def get_rescaled_params(params, pft, final_pars, default_param, param_dat):
+    
+    main_param = param_dat["main"]
+
+    all_rescaled = {}
+    for parameter in params:
+        if parameter in final_pars.columns:
+            val = final_pars[parameter].values
+            
+            if parameter == 'smpsc_delta':
+                actual_param_name = PARAM_INFO[parameter]['actual_param']
+            elif parameter == 'fates_stoich_nitr_1':
+                actual_param_name = PARAM_INFO[parameter]['actual_param']
+            else:
+                actual_param_name = parameter
+        
+            if parameter == 'fates_stoich_nitr_1':
+                default_value = default_param[actual_param_name].isel(fates_plant_organs=0)
+            else: 
+                default_value = default_param[actual_param_name]
+                
+            sub = main_param[main_param.fates_parameter_name == parameter]
+            
+            # get min and max parameter values
+            change_str_min = str(sub["param_min"].values[0])
+            change_str_max = str(sub["param_max"].values[0])
+            
+            min_value = get_param_value(
+                change_str_min, default_value, param_dat, parameter, "param_min"
+            )
+            max_value = get_param_value(
+                change_str_max, default_value, param_dat, parameter, "param_max"
+            )
+            unnormalized = unnormalize(val, min_value, max_value)
+            if unnormalized.size != 1:
+                norm_values = unnormalized.flatten()[pft-1]
+            else:
+                norm_values = unnormalized
+            all_rescaled[parameter] = norm_values
+    return all_rescaled
 
 
