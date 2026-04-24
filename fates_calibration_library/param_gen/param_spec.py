@@ -9,7 +9,7 @@ import xarray as xr
 import numpy as np
 import pandas as pd
 
-from fates_calibration_library.param_gen.bounds import ParamBounds
+from .bounds import ParamBounds
 from .param_type import (
     ParamType,
     SlicedParamType,
@@ -17,8 +17,7 @@ from .param_type import (
     MultiParamType,
 )
 
-VALID_STRATEGIES = {"default", "posterior"}
-
+VALID_STRATEGIES = {"uniform", "posterior"}
 
 @dataclass
 class DimIndex:
@@ -56,20 +55,20 @@ class ParamSpec:
     units : str
         Units string from the spreadsheet.
     dims : list[str]
-        NetCDF dimension names for this variable, e.g. ['fates_pft'] or
-        ['fates_leafage_class', 'fates_pft']. Empty list for scalars.
-    param_type : str
-        How this parameter gets written to the netCDF file:
+        NetCDF dimension names for this variable, e.g. ['fates_pft'],
+        ['fates_leafage_class', 'fates_pft'], or [] for scalars.
+    param_type : ParamType
+        How this parameter gets written to the file:
         - 'default'         : written directly to the variable named `name`
         - 'sliced'          : one specific index of one dimension is targeted;
                               see slice_dim and slice_index
-        - 'multi_param'     : a calibration handle for multiple netCDF vars
+        - 'multi_param'     : a calibration handle for multiple parameters
                               (the actual variable names are in root_params)
-        - 'scale_from_root' : value is expressed as a delta from a root param
-                              (root param netCDF name is in root_params)
+        - 'scale_from_root' : value is expressed as a delta from a root parameter
+                              (root param name is in root_params)
     strategy : str
         How the parameter value is generated during sampling:
-        - 'default'   : scaled between a min and max
+        - 'uniform'   : scaled between a min and max
         - 'posterior' : drawn from an external posterior distribution
     bounds : ParamBounds
         Min and max bounds for this parameter (FixedBound, PercentBound,
@@ -96,11 +95,9 @@ class ParamSpec:
         sampled independently.
         If False (default), a single LH value is applied across all indices
         and they move together.
-    fixed_indices : dict[str, list[int]]
-        Set by the expansion step. Maps dimension name to 0-based indices
-        that should be held at their default value when writing. The writer
-        uses this to skip those positions regardless of expansion mode.
-        Empty dict means no indices are fixed.
+    active_index : DimIndex | None
+        Set by the expansion step on expanded specs. Records which dimension
+        and index this spec is responsible for. None on unexpanded specs.
     """
 
     name: str
@@ -114,26 +111,23 @@ class ParamSpec:
     slice_index: Optional[int]
     root_params: list[str]
     expand_by_index: bool = False
-    fixed_indices: dict | None = None
+    active_index: Optional[DimIndex] = None
 
     def __post_init__(self):
         """Catch errors in parameter set up that would cause failures
         Raises:
-            ValueError: Invalid param_type
             ValueError: Invalid strategy
             ValueError: sliced type with no slice_index, slice_dim, or root_params
             ValueError: slice_dim, slice_index, and root_params set but not sliced_type
             ValueError: scale_from_root/multi_param with no root_params
         """
-        if self.fixed_indices is None:
-            self.fixed_indices = {}
-
         if self.strategy not in VALID_STRATEGIES:
             raise ValueError(
                 f"Invalid strategy '{self.strategy}' for parameter '{self.name}'. "
                 f"Must be one of: {sorted(VALID_STRATEGIES)}"
             )
-
+        
+        # slice_dim, slice_index, and root_params must always be set together
         if isinstance(self.param_type, SlicedParamType):
             slice_parts = [
                 self.slice_dim is not None,
@@ -166,11 +160,6 @@ class ParamSpec:
                 f"Parameter '{self.name}' has param_type '{self.param_type}' "
                 "but root_params is empty."
             )
-
-    @property
-    def is_pft_param(self) -> bool:
-        """True if this parameter varies per PFT."""
-        return "fates_pft" in self.dims
 
     @property
     def free_dims(self) -> list[str]:
@@ -234,7 +223,7 @@ class ParamSpec:
             units=str(row.get("units", "")),
             dims=_parse_dims(row.get("coord", "")),
             param_type=ParamType.from_str(str(row.get("param_type", "default"))),
-            strategy=str(row.get("strategy", "default")).strip(),
+            strategy=str(row.get("strategy", "uniform")).strip(),
             bounds=ParamBounds.from_row_and_sheet(row, pft_sheet),
             slice_dim=_parse_optional_str(row.get("slice_dim")),
             slice_index=_parse_optional_int(row.get("slice_index")),

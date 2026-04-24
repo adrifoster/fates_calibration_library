@@ -19,13 +19,14 @@ shared.
 """
 
 from __future__ import annotations
+from typing import TYPE_CHECKING
 from abc import ABC, abstractmethod
 import numpy as np
 import xarray as xr
 
-from fates_calibration_library.param_gen.param_spec import ParamSpec
 
-
+if TYPE_CHECKING:
+    from .param_spec import ParamSpec
 class ParamType(ABC):
     """Abstract base for parameter type-specific logic.
 
@@ -56,6 +57,7 @@ class ParamType(ABC):
         ds: xr.Dataset,
         default_ds: xr.Dataset,
         value: float | np.ndarray | list[np.ndarray],
+        fixed_indices: dict[str, list[int]] | None=None,
     ) -> None:
         """Write a scaled value into the working dataset.
 
@@ -64,6 +66,8 @@ class ParamType(ABC):
             ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
             default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
             value (float | np.ndarray | list[np.ndarray]): Scaled value from the sampler.
+            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
+                0-based indices to hold at default. None means no indices are fixed
         """
 
     @staticmethod
@@ -114,6 +118,7 @@ class DefaultParamType(ParamType):
         ds: xr.Dataset,
         default_ds: xr.Dataset,
         value: float | np.ndarray,
+        fixed_indices: dict[str, list[int]] | None=None,
     ) -> None:
         """Write a scaled value into the working dataset.
 
@@ -122,10 +127,12 @@ class DefaultParamType(ParamType):
             ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
             default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
             value (float | np.ndarray | list[np.ndarray]): Scaled value from the sampler.
+            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
+                0-based indices to hold at default. None means no indices are fixed
         """
         arr = ds[spec.name].values.copy()
         free_dim = spec.free_dims[0] if spec.free_dims else None
-        fixed = spec.fixed_indices.get(free_dim, []) if free_dim else []
+        fixed = (fixed_indices or {}).get(free_dim, []) if free_dim else []
 
         if spec.active_index is not None:
             arr[spec.active_index.index] = _as_scalar(value, spec.name)
@@ -160,6 +167,7 @@ class SlicedParamType(ParamType):
         ds: xr.Dataset,
         default_ds: xr.Dataset,
         value: float | np.ndarray,
+        fixed_indices: dict[str, list[int]] | None=None,
     ) -> None:
         """Write a scaled value into the working dataset.
 
@@ -168,6 +176,8 @@ class SlicedParamType(ParamType):
             ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
             default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
             value (float | np.ndarray | list[np.ndarray]): Scaled value from the sampler.
+            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
+                0-based indices to hold at default. None means no indices are fixed
         """
         arr = ds[spec.root_params[0]].values.copy()
         da_dims = list(ds[spec.root_params[0]].dims)
@@ -184,7 +194,7 @@ class SlicedParamType(ParamType):
             arr[tuple(idx)] = _as_scalar(value, spec.root_params[0])
         else:
             # not expanded — broadcast across free dim at this slice
-            fixed = spec.fixed_indices.get(free_dim, []) if free_dim else []
+            fixed = (fixed_indices or {}).get(free_dim, []) if free_dim else []
             slice_arr = arr[tuple(idx)].copy()
             slice_arr = _broadcast_to_array(
                 slice_arr, value, fixed, spec.root_params[0]
@@ -215,6 +225,7 @@ class ScaleFromRootParamType(ParamType):
         ds: xr.Dataset,
         default_ds: xr.Dataset,
         value: float | np.ndarray,
+        fixed_indices: dict[str, list[int]] | None=None,
     ) -> None:
         """Write a scaled value into the working dataset.
 
@@ -223,6 +234,8 @@ class ScaleFromRootParamType(ParamType):
             ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
             default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
             value (float | np.ndarray | list[np.ndarray]): Scaled value from the sampler.
+            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
+                0-based indices to hold at default. None means no indices are fixed
         """
         root_arr = ds[spec.root_params[0]].values.copy()  # already written
         arr = ds[spec.name].values.copy()
@@ -233,7 +246,7 @@ class ScaleFromRootParamType(ParamType):
             arr[i] = root_arr[i] + delta
         else:
             free_dim = spec.free_dims[0] if spec.free_dims else None
-            fixed = spec.fixed_indices.get(free_dim, []) if free_dim else []
+            fixed = (fixed_indices or {}).get(free_dim, []) if free_dim else []
 
             if arr.ndim == 0 or not spec.free_dims:
                 arr = root_arr + delta
@@ -269,6 +282,7 @@ class MultiParamType(ParamType):
         ds: xr.Dataset,
         default_ds: xr.Dataset,
         value: list[np.ndarray],
+        fixed_indices: dict[str, list[int]] | None=None,
     ) -> None:
         """Write a scaled value into the working dataset.
 
@@ -277,6 +291,8 @@ class MultiParamType(ParamType):
             ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
             default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
             value (float | np.ndarray | list[np.ndarray]): Scaled value from the sampler.
+            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
+                0-based indices to hold at default. None means no indices are fixed
         Raises:
             ValueError: incorrect number of values given
         """

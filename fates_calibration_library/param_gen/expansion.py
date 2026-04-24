@@ -2,21 +2,15 @@
 expand() — fans out ParamSpec objects with expand_by_index=True into one
 spec per active index along their first free dimension.
 
-Specs with expand_by_index=False pass through unchanged, but their
-fixed_indices are recorded so the writer knows which positions to skip.
+Specs with expand_by_index=False pass through unchanged.
+
+fixed_indices is a run-level configuration — it lives here and in the
+write step. Indices in fixed_indices are never expanded into specs; 
+all other indices are expanded over.
 
 Index conventions
 ------------------
 All incides are 0-based, matching numpy/xarray conventions.
-
-active_indices vs. fixed_indices
----------------------------------
-- fixed_indices  : indices always held at default value; never expanded into specs
-- active_indices : indices to vary (expanded if expand_by_index=True; else uniform)
-- neither        : treated as active (default behavior)
-- both           : raises ValueError
-
-The two dicts do not need to be exhaustive - any index in neither is treated as active
 """
 
 from __future__ import annotations
@@ -26,13 +20,12 @@ from typing import Optional
 
 import xarray as xr
 
-from fates_calibration_library.param_gen.param_spec import DimIndex, ParamSpec
+from .param_spec import DimIndex, ParamSpec
 
 
 def expand(
     specs: list[ParamSpec],
     default_ds: xr.Dataset,
-    active_indices: Optional[dict[str, list[int]]] = None,
     fixed_indices: Optional[dict[str, list[int]]] = None,
 ) -> list[ParamSpec]:
     """Expand specs with expand_by_index=True into one spec per active index.
@@ -42,48 +35,37 @@ def expand(
             mix of expand_by_index=True and expand_by_index=False.
         default_ds (xr.Dataset): Default FATES parameter dataset. Used to determine the
             full set of valid indices for each dimension, and to validate active_indices.
-        active_indices (Optional[dict[str, list[int]]], optional): Optional mapping of
-            dimension name to list of 0-based indices to expand over.
-            If a dimension is not in this dict, all indices for that dimension are used.
-            If None, all indices for all dimensions are used.
-            Validated against default_ds — passing an out-of-range index raises a
-            ValueError.
         fixed_indices (Optional[dict[str, list[int]]], optional): Mapping of dimension
             name to 0-based indices to hold at default. These are never expanded into
-            specs. If a dimension is absent, no indices are fixed for that dimension.
+            specs. If None, no indices are fixed and all are expanded over.
 
     Returns:
-        list[ParamSpec]: Expanded spec list. Unexpanded specs are the same objects as in
-            the input list. Expanded specs are shallow copies with expand_by_index
-            set to False and active_index set to a DimIndex.
+        list[ParamSpec]: Expanded spec list. Unexpanded specs are returned unchanged.
+        Expanded specs are shallow copies with expand_by_index=False and
+        active_index set to a DimIndex.
 
     Raises:
         ValueError
-            If any index appears in both active_indices and fixed_indices.
-        ValueError
-            If active_indices or fixed_indices reference unknown dimensions
-            or out-of-range indices.
+            If fixed_indices references unknown dimensions or out-of-range indices.
         ValueError
             If a spec with expand_by_index=True has no free_dims.
     """
+    fixed = fixed_indices or {}
     full_index_map = _build_full_index_map(default_ds)
-    fixed = _validate_and_normalize(
-        fixed_indices or {}, full_index_map, "fixed_indices"
-    )
-    active = _resolve_active(active_indices, fixed, full_index_map)
-    _check_overlap(active, fixed)
+    _validate_fixed(fixed, full_index_map)
 
     result = []
     for spec in specs:
         if not spec.expand_by_index:
-            clone = copy.copy(spec)
-            clone.fixed_indices = fixed
-            result.append(clone)
+            result.append(spec)
         else:
-            result.extend(_expand_spec(spec, active, fixed, full_index_map))
+            result.extend(_expand_spec(spec, fixed, full_index_map))
 
     return result
 
+# ----------------------------------------------------------------------------------------
+# Internal helpers
+# ----------------------------------------------------------------------------------------
 
 def _build_full_index_map(default_ds: xr.Dataset) -> dict[str, list[int]]:
     """Build a map of all dimension names to all valid 0-based indices.
@@ -98,79 +80,53 @@ def _build_full_index_map(default_ds: xr.Dataset) -> dict[str, list[int]]:
     return {dim: list(range(default_ds.sizes[dim])) for dim in default_ds.dims}
 
 
-def _validate_and_normalize(
-    indices: dict[str, list[int]],
+def _validate_fixed(
+    fixed: dict[str, list[int]],
     full_index_map: dict[str, list[int]],
-    label: str,
-) -> dict[str, list[int]]:
-    for dim, idxs in indices.items():
+):
+    """Raise if fixed_indices references unknown dims or out-of-range indices.
+
+    Args:
+        fixed (dict[str, list[int]]): input mapping of dim to indices of fixed indices
+        full_index_map (dict[str, list[int]]): full available mapping of dim to indices
+
+    Raises:
+        ValueError: fixed_indices has dimension which does not exist in default_ds
+        ValueError: out of range index
+    """
+    for dim, idxs in fixed.items():
         if dim not in full_index_map:
             raise ValueError(
-                f"{label} contains dimension '{dim}' which does not exist "
-                f"in default_ds. Available dimensions: {sorted(full_index_map)}"
+               f"fixed_indices contains dimension '{dim}' which does not "
+               f"exist in default_ds. Available dimensions: {sorted(full_index_map)}"
             )
         valid = full_index_map[dim]
         invalid = [i for i in idxs if i not in valid]
         if invalid:
             raise ValueError(
-                f"{label}['{dim}'] contains out-of-range indices {invalid}. "
+                f"fixed_indices['{dim}'] contains out-of-range indices {invalid}. "
                 f"Valid range for '{dim}' is 0–{len(valid) - 1}."
             )
-    return indices
-
-
-def _resolve_active(
-    active_indices: Optional[dict[str, list[int]]],
-    fixed: dict[str, list[int]],
-    full_index_map: dict[str, list[int]],
-) -> dict[str, list[int]]:
-    """Merge active_indices with full_index_map, validating as we go.
-
-    Args:
-        active_indices (Optional[dict[str, list[int]]]): optional input dictionary of
-            active indices
-        full_index_map (dict[str, list[int]]): a full index mapping from the
-            default dataset
-
-    Returns:
-        dict[str, list[int]]: dict that has an entry for every dimension in full_index_map,
-        using active_indices values where provided and full indices otherwise.
-    """
-
-    if active_indices is not None:
-        _validate_and_normalize(active_indices, full_index_map, "active_indices")
-
-    resolved = {}
-    for dim, all_idxs in full_index_map.items():
-        if active_indices is not None and dim in active_indices:
-            resolved[dim] = active_indices[dim]
-        else:
-            fixed_for_dim = fixed.get(dim, [])
-            resolved[dim] = [i for i in all_idxs if i not in fixed_for_dim]
-
-    return resolved
-
-
-def _check_overlap(
-    active: dict[str, list[int]],
-    fixed: dict[str, list[int]],
-):
-    for dim in set(active) & set(fixed):
-        overlap = set(active[dim]) & set(fixed[dim])
-        if overlap:
-            raise ValueError(
-                f"Dimension '{dim}' has indices {sorted(overlap)} in both "
-                "active_indices and fixed_indices. Each index must be in "
-                "one or the other, not both."
-            )
-
 
 def _expand_spec(
     spec: ParamSpec,
-    active: dict[str, list[int]],
     fixed: dict[str, list[int]],
     full_index_map: dict[str, list[int]],
 ) -> list[ParamSpec]:
+    """Return one expanded copy of spec per active index of free_dims[0].
+
+    Args:
+        spec (ParamSpec): parameter to expand
+        fixed (dict[str, list[int]]): mapping of dim to indices of indices to fix
+        full_index_map (dict[str, list[int]]): full available dim: indes mapping 
+
+    Raises:
+        ValueError: no free dims to expand over
+        ValueError: dimension not fouond in default_ds
+
+    Returns:
+        list[ParamSpec]: _description_
+    """
     if not spec.free_dims:
         raise ValueError(
             f"Parameter '{spec.name}' has expand_by_index=True but no "
@@ -189,13 +145,14 @@ def _expand_spec(
             f"found in default_ds. Available dimensions: {sorted(full_index_map)}"
         )
 
-    indices = active.get(expand_dim, full_index_map[expand_dim])
+    fixed_for_dim = fixed.get(expand_dim, [])
+    active = [i for i in full_index_map[expand_dim] if i not in fixed_for_dim]
+    
     expanded = []
-    for idx in indices:
+    for idx in active:
         clone = copy.copy(spec)
         clone.expand_by_index = False
         clone.active_index = DimIndex(dim=expand_dim, index=idx)
-        clone.fixed_indices = fixed
         expanded.append(clone)
 
     return expanded
