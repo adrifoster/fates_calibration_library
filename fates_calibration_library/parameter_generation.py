@@ -6,51 +6,10 @@ import numpy as np
 import xarray as xr
 from scipy.stats import qmc
 
-def get_param_dictionary(param_list_file: str) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
-    """Given an input excel file path, returns a dictionary with information about all
-    parameters ('main') as well as pft-specific sheets in a dictionary
-
-    Args:
-        param_list_file (str): path to excel file
-
-    Returns:
-        tuple[pd.DataFrame, dict[str, pd.DataFrame]]: information about parameters
-    """
-
-    xl = pd.ExcelFile(param_list_file, engine="xlrd")
-    main = pd.read_excel(xl, sheet_name="main")
-    pft_sheets = {}
-    for sheet in xl.sheet_names:
-        if sheet != "main":
-            pft_sheets[f"fates_{sheet}"] = pd.read_excel(xl, sheet_name=sheet)
-            
-    return main, pft_sheets
-
-def generate_suffix(ensemble_number: int, pad_length: int = 3) -> str:
-    """Generate a suffix for an ensemble member
-
-    Args:
-        ensemble_number (int): ensemble number
-        pad_length (int, optional): pad length. Defaults to 3.
-
-    Returns:
-        str: output string
-    """
-    return str(ensemble_number).zfill(pad_length)
 
 
-def write_ensemble_list(param_prefix: str, ensembles: list[str], out_dir: str):
-    """Writes out a list of ensemble members to supply to the run_ens script
 
-    Args:
-        param_prefix (str): parameter file prefix
-        ensembles (list[str]): list of ensembles
-        out_dir (str): output directory to write file to
-    """
-    file_names = [f"{ens}" for ens in ensembles]
-    with open(os.path.join(out_dir, f"{param_prefix}.txt"), "w", encoding="utf-8") as f:
-        for line in file_names:
-            f.write(f"{line}\n")
+
 
 def get_sample_values(default_value, i, param_dict, jags_dict, parameter, actual_param_name):
     

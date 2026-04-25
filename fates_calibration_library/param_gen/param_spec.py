@@ -5,31 +5,24 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from typing import Optional
-import xarray as xr
-import numpy as np
 import pandas as pd
 
 from .bounds import ParamBounds
-from .param_type import (
-    ParamType,
-    SlicedParamType,
-    ScaleFromRootParamType,
-    MultiParamType,
-)
 
 VALID_STRATEGIES = {"uniform", "posterior"}
+VALID_PARAM_TYPES = {"default", "sliced", "scale_from_root", "multi_param"}
+
 
 @dataclass
 class DimIndex:
-    """A pinned position in a single netCDF dimension.
+    """A pinned position in a single dimension.
 
-    Used on expanded ParamSpec objects to record which dimension and index
-    this spec is responsible for writing to.
+    Used on expanded Parameter objects to record which dimension and index
 
     Attributes
     ----------
     dim : str
-        The netCDF dimension name, e.g. 'fates_pft'.
+        The dimension name, e.g. 'fates_pft'.
     index : int
         The 0-based index along that dimension.
     """
@@ -40,7 +33,7 @@ class DimIndex:
 
 @dataclass
 class ParamSpec:
-    """All metadata for a single calibratable FATES parameter.
+    """All metadata for a single calibratable parameter. Belongs to a Parameter object.
 
     Attributes
     ----------
@@ -49,23 +42,20 @@ class ParamSpec:
         This is what you use to refer to the parameter everywhere. For
         'default' and some 'sliced' types it matches the netCDF variable
         name directly. For 'multi_param' and 'scale_from_root' types the
-        actual netCDF variable(s) are in root_params.
+        actual netCDF variable(s) are in base_params.
+    category: str
+        Parameter category; useful description for grouping parameters
+    subcategory: str
+        Parameter subcategory; useful description for grouping parameters
     long_name : str
         Human-readable description from the spreadsheet.
     units : str
         Units string from the spreadsheet.
     dims : list[str]
-        NetCDF dimension names for this variable, e.g. ['fates_pft'],
+        Dimension names for this parameter, e.g. ['fates_pft'],
         ['fates_leafage_class', 'fates_pft'], or [] for scalars.
-    param_type : ParamType
-        How this parameter gets written to the file:
-        - 'default'         : written directly to the variable named `name`
-        - 'sliced'          : one specific index of one dimension is targeted;
-                              see slice_dim and slice_index
-        - 'multi_param'     : a calibration handle for multiple parameters
-                              (the actual variable names are in root_params)
-        - 'scale_from_root' : value is expressed as a delta from a root parameter
-                              (root param name is in root_params)
+    param_type : str
+        How this parameter gets scaled and written to parameter file
     strategy : str
         How the parameter value is generated during sampling:
         - 'uniform'   : scaled between a min and max
@@ -81,42 +71,36 @@ class ParamSpec:
     slice_index : int | None
         For 'sliced' param_type: which index along slice_dim to target.
         None for all other types.
-    root_params : list[str]
-        NetCDF variable names this parameter is linked to. Meaning depends
-        on param_type:
+    base_params : list[str]
+        Parameter names this parameter is linked to. Meaning depends on param_type:
         - 'default'                 : empty
         - 'sliced'                  : single entry - the original parameter name
-        - 'scale_from_root'         : single entry — the root parameter
+        - 'scale_from_root'         : single entry — the original parameter name
         - 'multi_param'             : all parameters this handle writes to
-    expand_by_index : bool
-        If True, this parameter will be expanded into one independent spec
-        per active index during the expansion step (e.g. one per PFT, one
-        per plant organ). Each index gets its own LH dimension and can be
-        sampled independently.
-        If False (default), a single LH value is applied across all indices
-        and they move together.
-    active_index : DimIndex | None
-        Set by the expansion step on expanded specs. Records which dimension
-        and index this spec is responsible for. None on unexpanded specs.
+    root_param: str | None
+        For 'scale_from_root' param_type: the parameter to scale from
+        None for all other types.
     """
 
     name: str
     long_name: str
+    category: str
+    subcategory: str
     units: str
     dims: list[str]
-    param_type: ParamType
+    param_type: str
     strategy: str
     bounds: ParamBounds
     slice_dim: Optional[str]
     slice_index: Optional[int]
-    root_params: list[str]
-    expand_by_index: bool = False
-    active_index: Optional[DimIndex] = None
+    root_param: Optional[str]
+    base_params: list[str]
 
     def __post_init__(self):
         """Catch errors in parameter set up that would cause failures
         Raises:
             ValueError: Invalid strategy
+            ValueError: Invalid param_type
             ValueError: sliced type with no slice_index, slice_dim, or root_params
             ValueError: slice_dim, slice_index, and root_params set but not sliced_type
             ValueError: scale_from_root/multi_param with no root_params
@@ -126,39 +110,62 @@ class ParamSpec:
                 f"Invalid strategy '{self.strategy}' for parameter '{self.name}'. "
                 f"Must be one of: {sorted(VALID_STRATEGIES)}"
             )
-        
-        # slice_dim, slice_index, and root_params must always be set together
-        if isinstance(self.param_type, SlicedParamType):
+        if self.param_type not in VALID_PARAM_TYPES:
+            raise ValueError(
+                f"Invalid param_type '{self.param_type}' for parameter '{self.name}'. "
+                f"Must be one of: {sorted(VALID_PARAM_TYPES)}"
+            )
+
+        # slice_dim, slice_index, and base_params must always be set together
+        if self.param_type == "sliced":
             slice_parts = [
                 self.slice_dim is not None,
                 self.slice_index is not None,
-                bool(self.root_params),
+                bool(self.base_params),
             ]
             if not (all(slice_parts) or not any(slice_parts)):
                 raise ValueError(
-                    f"Parameter '{self.name}': slice_dim, slice_index, and root_params "
+                    f"Parameter '{self.name}': slice_dim, slice_index, and base_params "
                     "must all be set or all be None/empty."
                 )
-        if isinstance(self.param_type, SlicedParamType) and self.slice_dim is None:
+        if self.param_type == "sliced" and self.slice_dim is None:
             raise ValueError(
                 f"Parameter '{self.name}' has param_type 'sliced' "
-                "slice_dim, slice_index, and root_params are not set."
+                "slice_dim, slice_index, and base_params are not set."
             )
-        if (
-            not isinstance(self.param_type, SlicedParamType)
-            and self.slice_dim is not None
-        ):
+        if self.param_type != "sliced" and self.slice_dim is not None:
             raise ValueError(
                 f"Parameter '{self.name}' has slice_dim set but param_type "
                 f"is '{self.param_type}', not 'sliced'."
             )
-        if (
-            isinstance(self.param_type, (ScaleFromRootParamType, MultiParamType))
-            and not self.root_params
-        ):
+
+        if self.param_type == "scale_from_root":
+            root_parts = [
+                self.root_param is not None,
+                bool(self.base_params),
+            ]
+            if not (all(root_parts) or not any(root_parts)):
+                raise ValueError(
+                    f"Parameter '{self.name}': root_param and base_params "
+                    "must all be set or all be None/empty."
+                )
+
+        if self.param_type == "scale_from_root" and self.root_param is None:
             raise ValueError(
-                f"Parameter '{self.name}' has param_type '{self.param_type}' "
-                "but root_params is empty."
+                f"Parameter '{self.name}' has param_type 'scale_from_root' "
+                "root_param and base_params are not set."
+            )
+
+        if self.param_type != "scale_from_root" and self.root_param is not None:
+            raise ValueError(
+                f"Parameter '{self.name}' has root_param set but param_type "
+                f"is '{self.param_type}', not 'scale_from_root'."
+            )
+
+        if self.param_type == "multi_param" and self.base_params is None:
+            raise ValueError(
+                f"Parameter '{self.name}' has param_type 'multi_param' "
+                "base_params are not set."
             )
 
     @property
@@ -174,34 +181,6 @@ class ParamSpec:
         if self.slice_dim is None:
             return self.dims
         return [d for d in self.dims if d != self.slice_dim]
-
-    def get_default_value(
-        self, default_ds: xr.Dataset
-    ) -> float | np.ndarray | list[np.ndarray] | list[float]:
-        """Extract the relevant default value(s) from a netCDF parameter dataset.
-        Args:
-            default_ds (xr.Dataset): The default parameter dataset
-
-        Returns:
-            float | np.ndarray | list[np.ndarray] | list[float]: Default parameter value.
-            Scalar or array for most types; list of scalars/arrays for 'multi_param'.
-        """
-        return self.param_type.get_default(self, default_ds)
-
-    def write(
-        self,
-        ds: xr.Dataset,
-        default_ds: xr.Dataset,
-        value: float | np.ndarray | list[np.ndarray],
-    ):
-        """Write a scaled value into the working parameter dataset.
-
-        Args:
-            ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
-            default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
-            value (float | np.ndarray | list[np.ndarray]): Scaled value from the sampler.
-        """
-        self.param_type.write(self, ds, default_ds, value)
 
     @classmethod
     def from_row(
@@ -219,16 +198,18 @@ class ParamSpec:
         """
         return cls(
             name=str(row["parameter_name"]),
+            category=str(row.get("category", "")),
+            subcategory=str(row.get("subcategory", "")),
             long_name=str(row.get("long_name", "")),
             units=str(row.get("units", "")),
             dims=_parse_dims(row.get("coord", "")),
-            param_type=ParamType.from_str(str(row.get("param_type", "default"))),
+            param_type=str(row.get("param_type", "default")).strip(),
             strategy=str(row.get("strategy", "uniform")).strip(),
             bounds=ParamBounds.from_row_and_sheet(row, pft_sheet),
             slice_dim=_parse_optional_str(row.get("slice_dim")),
             slice_index=_parse_optional_int(row.get("slice_index")),
-            root_params=_parse_list(row.get("root_params", "")),
-            expand_by_index=bool(row.get("expand_by_index", False)),
+            base_params=_parse_list(row.get("base_params", "")),
+            root_param=_parse_optional_str(row.get("root_param")),
         )
 
 
