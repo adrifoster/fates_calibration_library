@@ -1,23 +1,19 @@
 """
 Scaler - abstract base class for parameter scaling strategies
-A Scaler takes a ParamSpec, a normalized value in [0, 1], and an optional
+A Scaler takes a Parameter, a normalized value in [0, 1], and an optional
 default_value, and returns a concrete parameter value ready to be written
 to a parameter file.
 
 Concrete implementations
 ------------------------
 DefaultScaler : linearly interpolates between resolved min and max bounds.
-
-Adding a new strategy:
-----------------------
-Subclass Scaler, implement scale(), and it's ready to use.
 """
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
 import numpy as np
 
-from .param_spec import ParamSpec
+from .parameter import Parameter
 
 class Scaler(ABC):
     """Abstract base for parameter scaling strategies.
@@ -29,14 +25,14 @@ class Scaler(ABC):
     @abstractmethod
     def scale(
         self,
-        spec: ParamSpec,
+        param: Parameter,
         lh_value: float,
         default_value: float | np.ndarray | None = None,
     ) -> float | np.ndarray:
         """Convert a normalized [0, 1] value into a concrete parameter value.
 
         Args:
-            spec (ParamSpec): The parameter being scaled. Provides bounds and metadata.
+            param (Parameter): The parameter being scaled. Provides bounds and metadata.
             lh_value (float): A value in [0, 1] from the sampler (e.g. Latin Hypercube).
             default_value (float | np.ndarray | None, optional): The default parameter
             value from the parameter file. Required if either bound is a PercentBound;
@@ -47,7 +43,28 @@ class Scaler(ABC):
             non-PFT parameters with fixed/percent bounds; returns np.ndarray for
             PFTBound parameters.
         """
+    
+    @abstractmethod
+    def normalize(
+        self,
+        param: Parameter,
+        value: float | np.ndarray,
+        default_value: float | np.ndarray | None = None,
+    ) -> float | np.ndarray:
+        """Convert a concrete parameter value into a normalized [0, 1] value.
 
+        Args:
+            param (Parameter): The parameter being scaled. Provides bounds and metadata.
+            value (float | np.ndarray): Parameter value
+            default_value (float | np.ndarray | None, optional): The default parameter
+            value from the parameter file. Required if either bound is a PercentBound;
+            ignored otherwise. Defaults to None.
+
+        Returns:
+            float | np.ndarray: The normalized parameter value. Returns a float for
+            non-PFT parameters with fixed/percent bounds; returns np.ndarray for
+            PFTBound parameters
+        """
 
 class DefaultScaler(Scaler):
     """Linearly interpolates between resolved min and max bounds.
@@ -61,14 +78,14 @@ class DefaultScaler(Scaler):
 
     def scale(
         self,
-        spec: ParamSpec,
+        param: Parameter,
         lh_value: float,
         default_value: float | np.ndarray | None = None,
     ) -> float | np.ndarray:
         """Convert a normalized [0, 1] value into a concrete parameter value.
 
         Args:
-            spec (ParamSpec): The parameter being scaled. Provides bounds and metadata.
+            param (Parameter): The parameter being scaled. Provides bounds and metadata.
             lh_value (float): A value in [0, 1] from the sampler (e.g. Latin Hypercube).
             default_value (float | np.ndarray | None, optional): The default parameter
             value from the parameter file. Required if either bound is a PercentBound;
@@ -81,26 +98,26 @@ class DefaultScaler(Scaler):
         """
 
         # get the bounds
-        min_val, max_val = spec.bounds.resolve(default_value)
+        min_val, max_val = param.bounds.resolve(default_value)
         if min_val is None or max_val is None:
             raise ValueError(
-                f"Parameter '{spec.name}' has NullBounds — cannot scale. "
+                f"Parameter '{param.spec.name}' has NullBounds — cannot scale. "
         )
-        self._validate_bounds(spec.name, min_val, max_val)
+        self._validate_bounds(param.spec.name, min_val, max_val)
 
         # scale
         return min_val + lh_value * (max_val - min_val)
     
     def normalize(
         self,
-        spec: ParamSpec,
+        param: Parameter,
         value: float | np.ndarray,
         default_value: float | np.ndarray | None = None,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value.
 
         Args:
-            spec (ParamSpec): The parameter being scaled. Provides bounds and metadata.
+            param (Parameter): The parameter being scaled. Provides bounds and metadata.
             value (float | np.ndarray): Parameter value
             default_value (float | np.ndarray | None, optional): The default parameter
             value from the parameter file. Required if either bound is a PercentBound;
@@ -113,8 +130,8 @@ class DefaultScaler(Scaler):
         """
 
         # get the bounds
-        min_val, max_val = spec.bounds.resolve(default_value)
-        self._validate_bounds(spec.name, min_val, max_val)
+        min_val, max_val = param.bounds.resolve(default_value)
+        self._validate_bounds(param.spec.name, min_val, max_val)
 
         # normalize
         return (value - min_val) / (max_val - min_val)

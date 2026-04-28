@@ -10,6 +10,11 @@ All three share a common resolve() interface. The sampler calls resolve() to
 get the actual float/array it needs — it never needs to know which type
 it's dealing with.
 
+NullBound is returned for posterior parameters — strategy.requires_bounds()
+is False for those, so bounds are never resolved at sample time. NullBound
+exists only as a safe placeholder so Parameter.__init__ can unconditionally
+construct a ParamBounds without special-casing posterior params.
+
 PFTBound is always used for both min and max together (never mixed with
 Fixed or Percent on the same parameter).  PFT-specific values must be
 fixed numbers — no percent syntax is allowed in per-parameter sheets.
@@ -33,6 +38,8 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+
+from .strategy import Strategy
 
 # ---------------------------------------------------------------------------
 # Abstract base
@@ -60,16 +67,28 @@ class Bound(ABC):
     @staticmethod
     def parse(cell_value: str | float | int, bound_side: str) -> Bound:
         """Parse a single param_min or param_max cell into a Bound object.
+        
+        Returns a NullBound for posterior parameters (i.e. when the cell
+        value matches Strategy.POSTERIOR). This keeps Parameter.__init__
+        unconditional — it always constructs a ParamBounds, and callers
+        gate resolution on strategy.requires_bounds().
+        
+        Accepted formats:
+            - Plain number : '0.9', '1', '-0.5'
+            - Percent      : '50percent', '50%', '50 percent', '50 %'
+            - Posterior    : 'posterior' (returns NullBound)
 
         Args:
             cell_value (str | foat | int): Raw value from the spreadsheet cell.
             bound_side (str): 'min' or 'max' — needed to apply percent change in the right
             direction.
-
+        
         Raises:
-            ValueError: bound side must be 'min' or 'max'
-            ValueError: bound cell is empty
-            ValueError: Can't parse 'pft' with this, must use .from_sheet()
+            ValueError
+            if bound_side is not 'min' or 'max', if the cell is empty,
+            if the value is 'pft' (must go through PFTBound.from_sheet),
+            if a percent value is zero (would make min == max == default),
+            or if the value cannot be parsed as a number.
 
         Returns:
             Bound: A FixedBound or PercentBound.
@@ -84,21 +103,51 @@ class Bound(ABC):
             raise ValueError("Bound cell is empty.")
 
         as_str = str(cell_value).strip().lower()
+        
+        # check strategy to see if this is a posterior marker
+        try:
+            strategy = Strategy.parse(as_str)
+            if strategy.requires_posterior():
+                return NullBound(value=None)
+        except ValueError:
+            pass  # not a strategy string; continue parsing as a bound value
 
-        if as_str == "posterior":
-            return NullBound(value=None)
-
+        # wrong class method
         if as_str == "pft":
             raise ValueError(
                 "Cannot parse 'pft' bound with Bound.parse(). "
                 "Use PFTBound.from_sheet() instead."
             )
+        
+        # we accept "50%" or "50percent"
+        normalised = as_str.replace(" ", "").replace("%", "percent")
 
-        if "percent" in as_str:
-            percent = float(as_str.replace("percent", "").strip())
+        if "percent" in normalised:
+            percent_str = normalised.replace("percent", "").strip()
+            try:
+                percent = float(percent_str)
+            except ValueError:
+                raise ValueError(
+                    f"Could not parse percent bound '{cell_value}': "
+                    f"expected a number before 'percent' or '%', got '{percent_str}'."
+                )
+                    
+            if percent == 0.0:
+                raise ValueError(
+                    f"Percent bound of 0 for param_{bound_side}='{cell_value}' would "
+                    "make min == max == default. Use a non-zero percentage."
+                )
             return PercentBound(percent=percent, bound_side=bound_side)
-
-        return FixedBound(value=float(as_str))
+        
+        # Otherwise must be a plain number
+        try:
+            return FixedBound(value=float(as_str))
+        except ValueError:
+            raise ValueError(
+                f"Could not parse bound '{cell_value}' for param_{bound_side}. "
+                "Expected a number, a percent (e.g. '50percent', '50perc', or '50%'), "
+                "or 'posterior'."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -108,8 +157,10 @@ class Bound(ABC):
 
 @dataclass
 class NullBound(Bound):
-    """None. For strategies that will be pulled from a distribution, not scaled between
-    a minimum and a maximum
+    """Placeholder bound for parameters whose strategy does not use bounds.
+    
+    Never resolved at sample time — callers must check
+    strategy.requires_bounds() before calling resolve().
     """
 
     value: None
@@ -214,13 +265,17 @@ class PFTBound(Bound):
         values = []
         for i, v in enumerate(raw):
             as_str = str(v).strip().lower()
-            if "percent" in as_str:
+            try:
+                value = float(as_str)
+            except ValueError:
                 raise ValueError(
                     f"PFT-specific bounds must be fixed numbers, but found "
                     f"'{v}' in row {i} of column '{col}'. "
                     "Use a plain number for per-PFT bounds."
+                    
                 )
-            values.append(float(as_str))
+
+            values.append(value)
 
         return cls(values=np.array(values, dtype=float))
 

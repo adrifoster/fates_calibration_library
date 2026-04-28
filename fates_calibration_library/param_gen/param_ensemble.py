@@ -14,8 +14,9 @@ import xarray as xr
 
 from .posterior import PosteriorConfig
 from .parameter import Parameter
-from .param_spec import DimIndex
+from .parameter import DimIndex
 from .scaler import DefaultScaler
+from .strategy import Strategy
 
 
 class ParamEnsemble(ABC):

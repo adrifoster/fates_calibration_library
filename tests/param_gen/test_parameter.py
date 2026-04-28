@@ -1,11 +1,11 @@
 """Tests for param_gen.parameter — Parameter subclasses and helpers."""
 
 import numpy as np
-import pandas as pd
 import pytest
-import xarray as xr
 
+from fates_calibration_library.param_gen.bounds import FixedBound, PFTBound, NullBound, PercentBound
 from fates_calibration_library.param_gen.parameter import (
+    DimIndex,
     DefaultParameter,
     JointParameter,
     Parameter,
@@ -14,6 +14,21 @@ from fates_calibration_library.param_gen.parameter import (
     _as_scalar,
     _broadcast_to_array,
 )
+
+# ===========================================================================
+# DimIndex
+# ===========================================================================
+
+
+def test_dimindex_stores_dim_and_index():
+    """DimIndex correctly stores dim name and 0-based index.
+
+    Args:
+        None
+    """
+    di = DimIndex(dim="fates_pft", index=2)
+    assert di.dim == "fates_pft"
+    assert di.index == 2
 
 
 # ===========================================================================
@@ -80,6 +95,117 @@ def test_active_index_is_none_on_construction(default_row):
     """
     param = Parameter.from_row(default_row)
     assert param.active_index is None
+
+
+# ===========================================================================
+# Bounds gating
+# ===========================================================================
+ 
+ 
+def test_uniform_parameter_has_bounds(default_row):
+    """A uniform strategy parameter has a ParamBounds instance."""
+    param = Parameter.from_row(default_row)
+    assert param.bounds is not None
+    assert isinstance(param.bounds.min_bound, FixedBound)
+    assert isinstance(param.bounds.max_bound, FixedBound)
+ 
+ 
+def test_posterior_parameter_has_no_bounds(joint_param_row):
+    """A posterior strategy parameter has bounds=None."""
+    param = Parameter.from_row(joint_param_row)
+    assert isinstance(param.bounds.min_bound, NullBound)
+    assert isinstance(param.bounds.max_bound, NullBound)
+    
+def test_percent_has_percent_bounds(percent_row):
+    """from_row correctly constructs a parameter with percent bounds.
+
+    Args:
+        percent_row (pd.Series): fixture
+    """
+    param = Parameter.from_row(percent_row)
+    assert isinstance(param.bounds.min_bound, PercentBound)
+    assert isinstance(param.bounds.max_bound, PercentBound)
+    
+def test_from_row_pft_bounds(pft_row, pft_sheet):
+    """from_row correctly constructs a parameter with PFT-specific bounds.
+
+    Args:
+        pft_row (pd.Series): fixture
+        pft_sheet (pd.DataFrame): fixture
+    """
+    param = Parameter.from_row(pft_row, pft_sheet=pft_sheet)
+    assert isinstance(param.bounds.min_bound, PFTBound)
+    assert isinstance(param.bounds.max_bound, PFTBound)
+
+    
+# ===========================================================================
+# Parameter.validate
+# ===========================================================================
+ 
+ 
+def test_validate_passes_for_default_parameter(default_row, default_ds):
+    """validate() does not raise for a correctly configured DefaultParameter."""
+    param = Parameter.from_row(default_row)
+    param.validate(default_ds)  # should not raise
+ 
+ 
+def test_validate_passes_for_sliced_parameter(sliced_row, default_ds):
+    """validate() does not raise for a correctly configured SlicedParameter."""
+    param = Parameter.from_row(sliced_row)
+    param.validate(default_ds)  # should not raise
+ 
+ 
+def test_validate_passes_for_scale_from_root_parameter(scale_from_root_row, default_ds):
+    """validate() does not raise for a correctly configured ScaleFromRootParameter."""
+    param = Parameter.from_row(scale_from_root_row)
+    param.validate(default_ds)  # should not raise
+ 
+ 
+def test_validate_passes_for_joint_parameter(joint_param_row, default_ds):
+    """validate() does not raise for a correctly configured JointParameter."""
+    param = Parameter.from_row(joint_param_row)
+    param.validate(default_ds)  # should not raise
+ 
+ 
+def test_validate_raises_for_missing_variable(default_row, default_ds):
+    """validate() raises ValueError when the variable is missing from the dataset."""
+    default_row["parameter_name"] = "nonexistent_param"
+    param = Parameter.from_row(default_row)
+    with pytest.raises(ValueError, match="not found in default dataset"):
+        param.validate(default_ds)
+ 
+ 
+def test_validate_raises_for_wrong_dims(default_row, default_ds):
+    """validate() raises ValueError when spec.dims does not match the dataset dims."""
+    # Give the spec the wrong dims — variable exists but dims won't match
+    default_row["coord"] = "['fates_leafage_class', 'fates_pft']"
+    param = Parameter.from_row(default_row)
+    with pytest.raises(ValueError, match="Dimensions must match exactly"):
+        param.validate(default_ds)
+ 
+ 
+def test_validate_raises_for_missing_base_param(sliced_row, default_ds):
+    """validate() raises ValueError when a base_param variable is missing."""
+    sliced_row["base_params"] = "['nonexistent_param']"
+    param = Parameter.from_row(sliced_row)
+    with pytest.raises(ValueError, match="not found in default dataset"):
+        param.validate(default_ds)
+ 
+ 
+def test_validate_raises_for_missing_root_param(scale_from_root_row, default_ds):
+    """validate() raises ValueError when root_param is missing from the dataset."""
+    scale_from_root_row["root_param"] = "nonexistent_root"
+    param = Parameter.from_row(scale_from_root_row)
+    with pytest.raises(ValueError, match="not found in default dataset"):
+        param.validate(default_ds)
+ 
+ 
+def test_validate_called_at_construction_when_ds_supplied(default_row, default_ds):
+    """validate() is called immediately when default_ds is passed to from_row."""
+    default_row["parameter_name"] = "fates_nonexistent_param"
+    with pytest.raises(ValueError, match="not found in default dataset"):
+        Parameter.from_row(default_row, default_ds=default_ds)
+ 
 
 
 # ===========================================================================
@@ -153,7 +279,6 @@ def test_default_set_value_with_active_index(default_row, default_ds, working_ds
         default_ds (xr.Dataset): fixture
         working_ds (xr.Dataset): fixture
     """
-    from fates_calibration_library.param_gen.param_spec import DimIndex
     param = Parameter.from_row(default_row)
     param.active_index = DimIndex(dim="fates_pft", index=1)
     param.set_value(working_ds, default_ds, value=0.099)
@@ -239,7 +364,6 @@ def test_sliced_set_value_with_active_index(sliced_row, default_ds, working_ds):
         default_ds (xr.Dataset): fixture
         working_ds (xr.Dataset): fixture
     """
-    from fates_calibration_library.param_gen.param_spec import DimIndex
     param = Parameter.from_row(sliced_row)
     param.active_index = DimIndex(dim="fates_pft", index=1)
     param.set_value(working_ds, default_ds, value=99.0)
@@ -315,7 +439,6 @@ def test_scale_from_root_set_value_with_active_index(
         default_ds (xr.Dataset): fixture
         working_ds (xr.Dataset): fixture
     """
-    from fates_calibration_library.param_gen.param_spec import DimIndex
     param = Parameter.from_row(scale_from_root_row)
     param.active_index = DimIndex(dim="fates_pft", index=0)
     param.set_value(working_ds, default_ds, value=-5000.0)

@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
 
-
-VALID_STRATEGIES = {"uniform", "posterior"}
+from .strategy import Strategy
 
 @dataclass
 class ParamSpec:
@@ -40,10 +39,10 @@ class ParamSpec:
         ['fates_leafage_class', 'fates_pft'], or [] for scalars.
     param_type : str
         How this parameter gets scaled and written to parameter file
-    strategy : str
+    strategy : Strategy
         How the parameter value is generated during sampling:
-        - 'uniform'   : scaled between a min and max
-        - 'posterior' : drawn from an external posterior distribution
+        - Strategy.UNIFORM   : scaled between a min and max (bounds on Parameter)
+        - Strategy.POSTERIOR : drawn from an external posterior distribution
     param_min : str
         Raw param_min cell from the spreadsheet. Stored as a string and
         parsed into a Bound object by Parameter. Examples: '0.5',
@@ -75,7 +74,7 @@ class ParamSpec:
     units: str
     dims: list[str]
     param_type: str
-    strategy: str
+    strategy: Strategy
     param_min: str
     param_max: str
     slice_dim: Optional[str]
@@ -86,18 +85,10 @@ class ParamSpec:
     def __post_init__(self):
         """Catch errors in parameter set up that would cause failures
         Raises:
-            ValueError: Invalid strategy
-            ValueError: Invalid param_type
             ValueError: sliced type with no slice_index, slice_dim, or root_params
             ValueError: slice_dim, slice_index, and root_params set but not sliced_type
             ValueError: scale_from_root/joint with no root_params
         """
-        if self.strategy not in VALID_STRATEGIES:
-            raise ValueError(
-                f"Invalid strategy '{self.strategy}' for parameter '{self.name}'. "
-                f"Must be one of: {sorted(VALID_STRATEGIES)}"
-            )
-
         # slice_dim, slice_index, and base_params must always be set together
         if self.param_type == "sliced":
             slice_parts = [
@@ -174,6 +165,14 @@ class ParamSpec:
         Returns:
             ParamSpec: ParamSpec instance
         """
+
+        try:
+            strategy = Strategy.parse(str(row.get("strategy", "")))
+        except ValueError as e:
+            raise ValueError(
+                f"Parameter '{row.get('parameter_name')}': {e}"
+            ) from e
+        
         return cls(
             name=str(row["parameter_name"]),
             category=str(row.get("category", "")),
@@ -181,8 +180,8 @@ class ParamSpec:
             long_name=str(row.get("long_name", "")),
             units=str(row.get("units", "")),
             dims=_parse_dims(row.get("coord", "")),
-            param_type=str(row.get("param_type", "default")).strip(),
-            strategy=str(row.get("strategy", "uniform")).strip(),
+            param_type=str(row.get("param_type", "")).strip(),
+            strategy=strategy,
             param_min=str(row.get("param_min", "")).strip(),
             param_max=str(row.get("param_max", "")).strip(),
             slice_dim=_parse_optional_str(row.get("slice_dim")),

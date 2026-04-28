@@ -12,7 +12,6 @@ import xarray as xr
 
 from .param_spec import ParamSpec
 from .bounds import ParamBounds
-from .strategies import ParamStrategy
 
 
 @dataclass

@@ -1,32 +1,15 @@
-"""Tests for param_gen.param_spec: DimIndex, ParamSpec, and its parsing helpers."""
+"""Tests for param_gen.param_spec: ParamSpec and its parsing helpers."""
 
 import pytest
 
 from fates_calibration_library.param_gen.param_spec import (
-    DimIndex,
     ParamSpec,
     _parse_dims,
     _parse_list,
     _parse_optional_int,
     _parse_optional_str,
 )
-from fates_calibration_library.param_gen.bounds import PFTBound, PercentBound
-
-# ===========================================================================
-# DimIndex
-# ===========================================================================
-
-
-def test_dimindex_stores_dim_and_index():
-    """DimIndex correctly stores dim name and 0-based index.
-
-    Args:
-        None
-    """
-    di = DimIndex(dim="fates_pft", index=2)
-    assert di.dim == "fates_pft"
-    assert di.index == 2
-
+from fates_calibration_library.param_gen.strategy import Strategy
 
 # ===========================================================================
 # ParamSpec.from_row: successful construction
@@ -34,7 +17,7 @@ def test_dimindex_stores_dim_and_index():
 
 
 def test_from_row_default(default_row):
-    """from_row correctly constructs a default PFT parameter.
+    """from_row correctly constructs a default parameter.
 
     Args:
         default_row (pd.Series): fixture
@@ -42,7 +25,9 @@ def test_from_row_default(default_row):
     spec = ParamSpec.from_row(default_row)
     assert spec.name == "fates_leaf_slatop"
     assert spec.param_type == "default"
-    assert spec.strategy == "uniform"
+    assert spec.strategy == Strategy.UNIFORM
+    assert spec.param_min == "0.005"
+    assert spec.param_max == "0.05"
     assert spec.dims == ["fates_pft"]
     assert spec.slice_dim is None
     assert spec.slice_index is None
@@ -51,7 +36,7 @@ def test_from_row_default(default_row):
 
 
 def test_from_row_scalar(scalar_row):
-    """from_row correctly constructs a scalar (non-PFT) parameter.
+    """from_row correctly constructs a scalar parameter.
 
     Args:
         scalar_row (pd.Series): fixture
@@ -94,34 +79,11 @@ def test_from_row_joint_param(joint_param_row):
     """
     spec = ParamSpec.from_row(joint_param_row)
     assert spec.param_type == "joint"
-    assert spec.strategy == "posterior"
+    assert spec.strategy == Strategy.POSTERIOR
     assert spec.base_params == [
         "fates_leafn_vert_scaler_coeff1",
         "fates_leafn_vert_scaler_coeff2",
     ]
-
-
-def test_from_row_percent_bounds(percent_row):
-    """from_row correctly constructs a parameter with percent bounds.
-
-    Args:
-        percent_row (pd.Series): fixture
-    """
-    spec = ParamSpec.from_row(percent_row)
-    assert isinstance(spec.bounds.min_bound, PercentBound)
-    assert isinstance(spec.bounds.max_bound, PercentBound)
-
-
-def test_from_row_pft_bounds(pft_row, pft_sheet):
-    """from_row correctly constructs a parameter with PFT-specific bounds.
-
-    Args:
-        pft_row (pd.Series): fixture
-        pft_sheet (pd.DataFrame): fixture
-    """
-    spec = ParamSpec.from_row(pft_row, pft_sheet=pft_sheet)
-    assert isinstance(spec.bounds.min_bound, PFTBound)
-    assert isinstance(spec.bounds.max_bound, PFTBound)
 
 
 def test_from_row_metadata_fields(default_row):
@@ -152,6 +114,17 @@ def test_invalid_strategy_raises(default_row):
         default_row (pd.Series): fixture
     """
     default_row["strategy"] = "bad_strategy"
+    with pytest.raises(ValueError, match="Invalid strategy"):
+        ParamSpec.from_row(default_row)
+
+
+def test_missing_strategy_raises(default_row):
+    """from_row raises ValueError when strategy cell is empty.
+
+    Args:
+        default_row (pd.Series): fixture
+    """
+    default_row["strategy"] = ""
     with pytest.raises(ValueError, match="Invalid strategy"):
         ParamSpec.from_row(default_row)
 
