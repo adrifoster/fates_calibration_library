@@ -114,7 +114,7 @@ class NullBound(Bound):
 
     value: None
 
-    def resolve(self, default_value: float | np.ndarray | None) -> None:
+    def resolve(self, default_value: float | np.ndarray | None = None) -> None:
         """Return the concrete bound value.
 
         Args:
@@ -133,7 +133,7 @@ class FixedBound(Bound):
 
     value: float
 
-    def resolve(self, default_value: float | np.ndarray | None) -> float:
+    def resolve(self, default_value: float | np.ndarray | None = None) -> float:
         """Return the concrete bound value.
 
         Args:
@@ -157,7 +157,9 @@ class PercentBound(Bound):
     percent: float
     bound_side: str  # 'min' or 'max'
 
-    def resolve(self, default_value: float | np.ndarray) -> float | np.ndarray:
+    def resolve(
+        self, default_value: float | np.ndarray | None = None
+    ) -> float | np.ndarray:
         """Return the concrete bound value.
 
         Args:
@@ -189,7 +191,7 @@ class PFTBound(Bound):
 
     values: np.ndarray  # shape: (n_pfts,), dtype: float
 
-    def resolve(self, default_value=None) -> np.ndarray:
+    def resolve(self, default_value: float | np.ndarray | None = None) -> np.ndarray:
         return self.values
 
     @classmethod
@@ -277,6 +279,7 @@ class ParamBounds:
 
         Raises:
             ValueError: No pft_sheet supplied if param_min/param_max is pft
+            ValueError: Mixing of pft and some other bounds type
 
         Returns:
             ParamBounds: Bounds
@@ -285,6 +288,11 @@ class ParamBounds:
         max_raw = str(row.get("param_max", "")).strip().lower()
 
         if min_raw == "pft" or max_raw == "pft":
+            if min_raw != max_raw:
+                raise ValueError(
+                    f"Parameter '{row.get('parameter_name')}': param_min and param_max "
+                    "must both be 'pft' or neither — mixing is not supported."
+                )
             if pft_sheet is None:
                 raise ValueError(
                     f"Parameter '{row.get('parameter_name')}' has "

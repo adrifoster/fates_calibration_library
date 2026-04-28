@@ -12,6 +12,7 @@ import numpy as np
 from scipy.stats import qmc
 import xarray as xr
 
+from .posterior import PosteriorConfig
 from .parameter import Parameter
 from .param_spec import DimIndex
 from .scaler import DefaultScaler
@@ -27,6 +28,9 @@ class ParamEnsemble(ABC):
         file_prefix: str,
         param_list: Optional[list[str]] = None,
     ):
+        
+        ## TODO: re-order main correctly and then also enforce the order
+        ## of the create_ensemble_member for scale_from_root
         main, pft_sheets = _read_param_list(param_data_file)
 
         # subset to only a list of parameters if supplied
@@ -46,6 +50,7 @@ class ParamEnsemble(ABC):
         ]
         self.num_params = len(self.params)
         self.scaler = DefaultScaler()
+        self._posterior_configs: dict[str, PosteriorConfig] = {}
 
     @abstractmethod
     def create_samples(self) -> list[dict[Parameter, Any]]:
@@ -176,11 +181,33 @@ class ParamEnsemble(ABC):
 
         expanded = []
         for idx in active:
+            # here clone.spec points to the same ParamSpec as original,
+            # which is intentional
             clone = copy.copy(param)
             clone.active_index = DimIndex(dim=expand_dim, index=idx)
             expanded.append(clone)
 
         return expanded
+    
+    def attach_posteriors(self, yaml_path: Path) -> None:
+        """Load posterior configs from YAML
+
+        Args:
+            yaml_path (Path): Path to posterior_sources.yaml.
+
+        Raises:
+            ValueError: If a config entry has no matching Parameter
+        """
+        configs = PosteriorConfig.from_yaml(yaml_path)
+        posterior_params = [p for p in self.params if p.spec.strategy == "posterior"]
+        for param in posterior_params:
+            if param.spec.name not in configs:
+                raise ValueError(
+                    f"parameter '{param.spec.name}' has strategy='posterior' but no "
+                    "entry in posterior_sources.yaml."
+                )
+        self._posterior_configs = configs
+        
 
 
 class LatinHypercubeEnsemble(ParamEnsemble):
@@ -201,7 +228,7 @@ class LatinHypercubeEnsemble(ParamEnsemble):
         self.n_samples = n_samples
         self.prebuilt = prebuilt
 
-    def create_samples(self) -> list[dict[Parameter, Any]]:
+    def create_samples(self, default_ds) -> list[dict[Parameter, Any]]:
         """Create samples from the list of parameters
 
         Returns:
@@ -209,19 +236,46 @@ class LatinHypercubeEnsemble(ParamEnsemble):
             write
         """
 
-        lh_params = [p for p in self.params if p.spec.strategy == "uniform"]
+        # build latin hypercube
+        latin_hypercube = self.build_lh(len(self.params), self.prebuilt)
+                
+        # set up and check posterior params
         posterior_params = [p for p in self.params if p.spec.strategy == "posterior"]
-
-        latin_hypercube = self.build_lh(len(lh_params), self.prebuilt)
+        if len(posterior_params) > 0:
+            if not self._posterior_configs:
+                raise RuntimeError(
+                        f"Parameter ensemble does not have any posterior sources yet -"
+                        "run ParamEnsemble.attach_configs('yaml_path')"
+                    )
+            for param in posterior_params:
+                if param.spec.name not in self._posterior_configs:
+                    raise RuntimeError(
+                        f"parameter '{param.spec.name}' has strategy='posterior' but is not in"
+                        "posterior_configs - check input yaml and re-run attach_configs"
+                    )
+            for name, config in self._posterior_configs.items():
+                config.prepare(self.n_samples)
+        
+        
+        # draw samples
         samples = []
         for i in range(self.n_samples):
             sample: dict[Parameter, Any] = {}
 
-            for j, param in enumerate(lh_params):
-                sample[param] = float(latin_hypercube[i, j])
-
-            for param in posterior_params:
-                sample[param] = 0.5
+            for j, param in enumerate(self.params):
+                lh_value = latin_hypercube[i, j]
+                
+                if param.spec.strategy == 'uniform':
+                    sample[param] = float(lh_value)
+                elif param.spec.strategy == 'posterior':
+                    
+                    ## FIX THIS
+                    array_index = (
+                         param.active_index.index if param.active_index is not None else None
+                        )
+                    free_dim = param.spec.free_dims[0] if param.spec.free_dims else None
+                    n_indices = default_ds.sizes.get(free_dim, 1)
+                    sample[param] = self._posterior_configs[param.spec.name].draw(lh_value, array_index, n_indices)
 
             samples.append(sample)
 

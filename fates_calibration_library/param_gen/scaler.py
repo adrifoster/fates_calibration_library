@@ -82,6 +82,10 @@ class DefaultScaler(Scaler):
 
         # get the bounds
         min_val, max_val = spec.bounds.resolve(default_value)
+        if min_val is None or max_val is None:
+            raise ValueError(
+                f"Parameter '{spec.name}' has NullBounds — cannot scale. "
+        )
         self._validate_bounds(spec.name, min_val, max_val)
 
         # scale

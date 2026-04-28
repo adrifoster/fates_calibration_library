@@ -10,8 +10,6 @@ import pandas as pd
 from .bounds import ParamBounds
 
 VALID_STRATEGIES = {"uniform", "posterior"}
-VALID_PARAM_TYPES = {"default", "sliced", "scale_from_root", "multi_param"}
-
 
 @dataclass
 class DimIndex:
@@ -110,11 +108,6 @@ class ParamSpec:
                 f"Invalid strategy '{self.strategy}' for parameter '{self.name}'. "
                 f"Must be one of: {sorted(VALID_STRATEGIES)}"
             )
-        if self.param_type not in VALID_PARAM_TYPES:
-            raise ValueError(
-                f"Invalid param_type '{self.param_type}' for parameter '{self.name}'. "
-                f"Must be one of: {sorted(VALID_PARAM_TYPES)}"
-            )
 
         # slice_dim, slice_index, and base_params must always be set together
         if self.param_type == "sliced":
@@ -162,7 +155,7 @@ class ParamSpec:
                 f"is '{self.param_type}', not 'scale_from_root'."
             )
 
-        if self.param_type == "multi_param" and self.base_params is None:
+        if self.param_type == "multi_param" and not self.base_params:
             raise ValueError(
                 f"Parameter '{self.name}' has param_type 'multi_param' "
                 "base_params are not set."

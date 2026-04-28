@@ -1,5 +1,5 @@
 """
-Parameter - abstract base class for parameter logic
+Parameter - classes for parameter logic
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import numpy as np
 import xarray as xr
 
 from .param_spec import DimIndex, ParamSpec
+from .strategies import ParamStrategy
 
 
 class Parameter(ABC):
@@ -90,7 +91,7 @@ class DefaultParameter(Parameter, param_type="default"):
     """Standard parameter: written directly to ds[name]."""
 
     def get_default(self, default_ds: xr.Dataset) -> np.ndarray:
-        """Extract the relevant default value(s) from a netCDF dataset.
+        """Extract the relevant default value(s) from a parameter dataset.
 
         Args:
             default_ds (xr.Dataset): The default parameter dataset
@@ -133,7 +134,7 @@ class SlicedParameter(Parameter, param_type="sliced"):
     """Parameter that targets one slice of a dimension."""
 
     def get_default(self, default_ds: xr.Dataset) -> np.ndarray:
-        """Extract the relevant default value(s) from a netCDF dataset.
+        """Extract the relevant default value(s) from a parameter dataset.
 
         Args:
             default_ds (xr.Dataset): The default parameter dataset
@@ -191,7 +192,7 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
     """Parameter whose value is root + delta."""
 
     def get_default(self, default_ds: xr.Dataset) -> np.ndarray:
-        """Extract the relevant default value(s) from a netCDF dataset.
+        """Extract the relevant default value(s) from a parameter dataset.
 
         Args:
             default_ds (xr.Dataset): The default parameter dataset
@@ -242,11 +243,11 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
         ds[self.spec.base_params[0]].values = arr
 
 
-class MultiParameter(Parameter, param_type="multi_param"):
-    """Calibration handle for multiple parameters (e.g. posterior draws)."""
+class JointParameter(Parameter, param_type="joint"):
+    """Calibration handle for multiple connected parameters (e.g. posterior draws)."""
 
     def get_default(self, default_ds: xr.Dataset) -> list[np.ndarray]:
-        """Extract the relevant default value(s) from a netCDF dataset.
+        """Extract the relevant default value(s) from a parameter dataset.
 
         Args:
             default_ds (xr.Dataset): The default parameter dataset
@@ -272,14 +273,22 @@ class MultiParameter(Parameter, param_type="multi_param"):
             fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
                 0-based indices to hold at default. None means no indices are fixed
         """
-
-        if len(value) != len(self.spec.base_params):
+        value_arr = np.asarray(value)
+        if len(value_arr) != len(self.spec.base_params):
             raise ValueError(
                 f"Parameter '{self.spec.name}': expected {len(self.spec.base_params)} "
-                f"arrays (one per root_param) but got {len(value)}."
+                f"arrays (one per base_param) but got {len(value_arr)}."
             )
-        for var_name, arr_value in zip(self.spec.base_params, value):
-            ds[var_name].values = arr_value
+        for parameter, val in zip(self.spec.base_params, value_arr):
+            arr = ds[parameter].values.copy()
+            if self.active_index is not None:
+                arr[self.active_index.index] = _as_scalar(val, parameter)
+            else:
+                free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
+                fixed = (fixed_indices or {}).get(free_dim, []) if free_dim else []
+                arr = _broadcast_to_array(arr, val, fixed, parameter)
+            
+            ds[parameter].values = arr
 
 
 def _broadcast_to_array(

@@ -1,0 +1,228 @@
+"""Fixtures shared across param_gen tests."""
+
+import numpy as np
+import pandas as pd
+import xarray as xr
+import pytest
+
+N_PFTS = 3
+N_LEAFAGE = 2
+N_ORGANS = 4
+
+def _base_row(**kwargs) -> pd.Series:
+    """Build a minimal valid main-sheet row, with overrides."""
+    defaults = {
+        "parameter_name": "fates_leaf_slatop",
+        "long_name": "Specific Leaf Area (SLA) at top of canopy, projected area basis",
+        "category": "stomatal",
+        "subcategory": "photosynthesis",
+        "units": "m^2/gC",
+        "coord": "['fates_pft']",
+        "param_type": "default",
+        "strategy": "uniform",
+        "param_min": "0.005",
+        "param_max": "0.05",
+        "slice_dim": None,
+        "slice_index": None,
+        "root_param": None,
+        "base_params": "",
+    }
+    defaults.update(kwargs)
+    return pd.Series(defaults)
+
+@pytest.fixture
+def default_row() -> pd.Series:
+    """A valid row for a default PFT parameter.
+ 
+    Returns:
+        pd.Series: spreadsheet row
+    """
+    return _base_row()
+
+
+@pytest.fixture
+def scalar_row() -> pd.Series:
+    """A valid row for a scalar (non-PFT) default parameter.
+ 
+    Returns:
+        pd.Series: spreadsheet row
+    """
+    return _base_row(
+        parameter_name="fates_canopy_closure_thresh",
+        long_name="tree canopy coverage at which crown area allometry changes from savanna to forest value",
+        category="biogeochemistry",
+        subcategory="vegetation dynamics",
+        units="1/yr",
+        coord="[]",
+        param_min="0.7",
+        param_max="0.9",
+    )
+
+
+@pytest.fixture
+def sliced_row() -> pd.Series:
+    """A valid row for a sliced parameter (fates_leafage_class x fates_pft).
+ 
+    Returns:
+        pd.Series: spreadsheet row
+    """
+    return _base_row(
+        parameter_name="fates_leaf_vcmax25top",
+        long_name="maximum carboxylation rate of Rub. at 25C, canopy top",
+        category="stomatal",
+        subcategory="photosynthesis",
+        units="umol CO2/m^2/s",
+        coord="['fates_leafage_class', 'fates_pft']",
+        param_type="sliced",
+        param_min="20.0",
+        param_max="90.0",
+        slice_dim="fates_leafage_class",
+        slice_index=0,
+        base_params="fates_leaf_vcmax25top",
+    )
+
+@pytest.fixture
+def scale_from_root_row() -> pd.Series:
+    """A valid row for a scale_from_root parameter.
+ 
+    Returns:
+        pd.Series: spreadsheet row
+    """
+    return _base_row(
+        parameter_name="smpsc_delta",
+        long_name="Soil water potential at full stomatal closing (delta)",
+        category="stomatal",
+        subcategory="vegetation water",
+        units="mm",
+        coord="['fates_pft']",
+        param_type="scale_from_root",
+        param_min="-600000",
+        param_max="-20000",
+        root_param="fates_nonhydro_smpso",
+        base_params="fates_nonhydro_smpsc",
+    )
+
+
+@pytest.fixture
+def joint_param_row() -> pd.Series:
+    """A valid row for a joint parameter.
+ 
+    Returns:
+        pd.Series: spreadsheet row
+    """
+    return _base_row(
+        parameter_name="fates_leafn_vert_scaler",
+        long_name="Coefficient one for decrease in leaf nitrogen through the canopy, from Lloyd et al. 2010",
+        category="stomatal",
+        subcategory="photosynthesis",
+        units="unitless",
+        coord="['fates_pft']",
+        param_type="joint",
+        strategy="posterior",
+        param_min="posterior",
+        param_max="posterior",
+        base_params="['fates_leafn_vert_scaler_coeff1', 'fates_leafn_vert_scaler_coeff2']",
+    )
+
+
+@pytest.fixture
+def percent_row() -> pd.Series:
+    """A valid row for a parameter with percent-based bounds.
+ 
+    Returns:
+        pd.Series: spreadsheet row
+    """
+    return _base_row(
+        parameter_name="fates_leaf_vcmax25top",
+        param_min="50percent",
+        param_max="50percent",
+    )
+
+
+@pytest.fixture
+def pft_sheet() -> pd.DataFrame:
+    """A minimal per-parameter PFT bounds sheet with 3 PFTs.
+ 
+    Returns:
+        pd.DataFrame: PFT bounds sheet
+    """
+    return pd.DataFrame({
+        "pft_index": [1, 2, 3],
+        "pft_name": ["white_spruce", "black_spruce", "deciduous"],
+        "param_min": [0.005, 0.004, 0.008],
+        "param_max": [0.040, 0.035, 0.060],
+    })
+
+
+@pytest.fixture
+def pft_row(pft_sheet) -> pd.Series:
+    """A valid row for a parameter with PFT-specific bounds.
+ 
+    Returns:
+        pd.Series: spreadsheet row
+    """
+    return _base_row(
+        parameter_name="fates_leaf_slatop",
+        param_min="pft",
+        param_max="pft",
+    )
+
+
+@pytest.fixture
+def default_ds() -> xr.Dataset:
+    """A minimal default FATES parameter dataset covering all param types.
+
+    Returns:
+        xr.Dataset: default dataset
+    """
+    return xr.Dataset(
+        {
+            # default PFT parameter
+            "fates_leaf_slatop": (
+                ["fates_pft"],
+                np.array([0.010, 0.020, 0.030]),
+            ),
+            # scalar parameter
+            "fates_canopy_closure_thresh": (
+                [],
+                np.float64(0.5),
+            ),
+            # sliced parameter (leafage_class x pft)
+            "fates_leaf_vcmax25top": (
+                ["fates_leafage_class", "fates_pft"],
+                np.array([[50.0, 60.0, 70.0],
+                          [40.0, 50.0, 60.0]]),
+            ),
+            # scale_from_root — root and dependent
+            "fates_nonhydro_smpso": (
+                ["fates_pft"],
+                np.array([-50000.0, -60000.0, -70000.0]),
+            ),
+            "fates_nonhydro_smpsc": (
+                ["fates_pft"],
+                np.array([-100000.0, -110000.0, -120000.0]),
+            ),
+            # joint targets
+            "fates_leafn_vert_scaler_coeff1": (
+                ["fates_pft"],
+                np.array([0.012, 0.015, 0.005]),
+            ),
+            "fates_leafn_vert_scaler_coeff2": (
+                ["fates_pft"],
+                np.array([2.1, 2.5, 2.6]),
+            ),
+        }
+    )
+
+
+@pytest.fixture
+def working_ds(default_ds) -> xr.Dataset:
+    """A deep copy of default_ds to use as the working dataset.
+
+    Args:
+        default_ds (xr.Dataset): fixture
+
+    Returns:
+        xr.Dataset: working copy
+    """
+    return default_ds.copy(deep=True)
