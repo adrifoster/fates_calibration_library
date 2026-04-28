@@ -7,31 +7,17 @@ from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
 
-from .bounds import ParamBounds
 
 VALID_STRATEGIES = {"uniform", "posterior"}
 
 @dataclass
-class DimIndex:
-    """A pinned position in a single dimension.
-
-    Used on expanded Parameter objects to record which dimension and index
-
-    Attributes
-    ----------
-    dim : str
-        The dimension name, e.g. 'fates_pft'.
-    index : int
-        The 0-based index along that dimension.
-    """
-
-    dim: str
-    index: int
-
-
-@dataclass
 class ParamSpec:
     """All metadata for a single calibratable parameter. Belongs to a Parameter object.
+    
+    Note: 
+    This is a pure data container which mirrors exactly one row of the input calibration
+    spreadsheet. It has no knowledge of parameter datasets or bound resolution —
+    those concerns belong to Parameter, which owns a ParamSpec instance.
 
     Attributes
     ----------
@@ -39,8 +25,8 @@ class ParamSpec:
         Calibration handle — the parameter_name from the spreadsheet.
         This is what you use to refer to the parameter everywhere. For
         'default' and some 'sliced' types it matches the netCDF variable
-        name directly. For 'multi_param' and 'scale_from_root' types the
-        actual netCDF variable(s) are in base_params.
+        name directly. For 'joint' and 'scale_from_root' types the
+        actual parameter(s) are in base_params.
     category: str
         Parameter category; useful description for grouping parameters
     subcategory: str
@@ -58,10 +44,12 @@ class ParamSpec:
         How the parameter value is generated during sampling:
         - 'uniform'   : scaled between a min and max
         - 'posterior' : drawn from an external posterior distribution
-    bounds : ParamBounds
-        Min and max bounds for this parameter (FixedBound, PercentBound,
-        or PFTBound). Call bounds.resolve(default_value) to get concrete
-        values at sample time.
+    param_min : str
+        Raw param_min cell from the spreadsheet. Stored as a string and
+        parsed into a Bound object by Parameter. Examples: '0.5',
+        '50percent', 'pft', 'posterior'.
+    param_max : str
+        Raw param_max cell from the spreadsheet. Same format as param_min.
     slice_dim : str | None
         For 'sliced' param_type: which dimension is being indexed into,
         e.g. 'fates_leafage_class' or 'fates_plant_organs'.
@@ -88,7 +76,8 @@ class ParamSpec:
     dims: list[str]
     param_type: str
     strategy: str
-    bounds: ParamBounds
+    param_min: str
+    param_max: str
     slice_dim: Optional[str]
     slice_index: Optional[int]
     root_param: Optional[str]
@@ -101,7 +90,7 @@ class ParamSpec:
             ValueError: Invalid param_type
             ValueError: sliced type with no slice_index, slice_dim, or root_params
             ValueError: slice_dim, slice_index, and root_params set but not sliced_type
-            ValueError: scale_from_root/multi_param with no root_params
+            ValueError: scale_from_root/joint with no root_params
         """
         if self.strategy not in VALID_STRATEGIES:
             raise ValueError(
@@ -155,9 +144,9 @@ class ParamSpec:
                 f"is '{self.param_type}', not 'scale_from_root'."
             )
 
-        if self.param_type == "multi_param" and not self.base_params:
+        if self.param_type == "joint" and not self.base_params:
             raise ValueError(
-                f"Parameter '{self.name}' has param_type 'multi_param' "
+                f"Parameter '{self.name}' has param_type 'joint' "
                 "base_params are not set."
             )
 
@@ -176,15 +165,11 @@ class ParamSpec:
         return [d for d in self.dims if d != self.slice_dim]
 
     @classmethod
-    def from_row(
-        cls, row: pd.Series, pft_sheet: pd.DataFrame | None = None
-    ) -> ParamSpec:
+    def from_row(cls, row: pd.Series) -> ParamSpec:
         """Construct a ParamSpec from a single row of the main spreadsheet.
 
         Args:
             row (pd.Series): A row from the 'main' sheet DataFrame, indexed by column name.
-            pft_sheet : (pd.DataFrame | None, Optional): per-parameter PFT sheet for
-            this parameter, if param_min or param_max is 'pft'. Pass None for scalar bounds.
 
         Returns:
             ParamSpec: ParamSpec instance
@@ -198,13 +183,17 @@ class ParamSpec:
             dims=_parse_dims(row.get("coord", "")),
             param_type=str(row.get("param_type", "default")).strip(),
             strategy=str(row.get("strategy", "uniform")).strip(),
-            bounds=ParamBounds.from_row_and_sheet(row, pft_sheet),
+            param_min=str(row.get("param_min", "")).strip(),
+            param_max=str(row.get("param_max", "")).strip(),
             slice_dim=_parse_optional_str(row.get("slice_dim")),
             slice_index=_parse_optional_int(row.get("slice_index")),
             base_params=_parse_list(row.get("base_params", "")),
             root_param=_parse_optional_str(row.get("root_param")),
         )
 
+# ---------------------------------------------------------------------------
+# Private parsing helpers
+# ---------------------------------------------------------------------------
 
 def _parse_dims(value: str | None) -> list[str]:
     """Parse a coord cell like \"['fates_pft']\" into a list of strings.

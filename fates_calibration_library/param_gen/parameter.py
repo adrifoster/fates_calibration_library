@@ -3,15 +3,34 @@ Parameter - classes for parameter logic
 """
 
 from __future__ import annotations
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from typing import Optional
 import pandas as pd
 import numpy as np
 import xarray as xr
 
-from .param_spec import DimIndex, ParamSpec
+from .param_spec import ParamSpec
+from .bounds import ParamBounds
 from .strategies import ParamStrategy
 
+
+@dataclass
+class DimIndex:
+    """A pinned position in a single dimension.
+
+    Used on expanded Parameter objects to record which dimension and index
+
+    Attributes
+    ----------
+    dim : str
+        The dimension name, e.g. 'fates_pft'.
+    index : int
+        The 0-based index along that dimension.
+    """
+
+    dim: str
+    index: int
 
 class Parameter(ABC):
     """Abstract base for parameter logic.
@@ -20,6 +39,9 @@ class Parameter(ABC):
     ----------
     spec : ParamSpec
         All metadata for this parameter
+    bounds : ParamBounds
+        Unresolved min/max bounds. Call bounds.resolve(default_value) at
+        sample time to get concrete values.
     active_index: DimIndex | None
         Set by the expansion step on expanded Parameters. Records which dimension
         and index this Parameter is responsible for. None on unexpanded Parameters.
@@ -31,13 +53,24 @@ class Parameter(ABC):
         super().__init_subclass__(**kwargs)
         Parameter._registry[param_type] = cls
 
-    def __init__(self, row: pd.Series, pft_sheet: pd.DataFrame | None = None):
-        self.spec = ParamSpec.from_row(row, pft_sheet=pft_sheet)
+    def __init__(
+            self,
+            row: pd.Series,
+            pft_sheet: pd.DataFrame | None = None,
+            default_ds: xr.Dataset | None = None
+            ):
+        self.spec = ParamSpec.from_row(row)
+        self.bounds = ParamBounds.from_row_and_sheet(row, pft_sheet)
         self.active_index: Optional[DimIndex] = None
+        if default_ds is not None:
+            self.validate(default_ds)
 
     @classmethod
     def from_row(
-        cls, row: pd.Series, pft_sheet: pd.DataFrame | None = None
+        cls,
+        row: pd.Series,
+        pft_sheet: pd.DataFrame | None = None,
+        default_ds: xr.Dataset | None = None,
     ) -> Parameter:
         """Construct the correct Parameter subclass from a spreadsheet row."""
         param_type = str(row.get("param_type", "default")).strip()
@@ -47,7 +80,39 @@ class Parameter(ABC):
                 f"Unknown param_type '{param_type}'. "
                 f"Valid types: {sorted(cls._registry)}"
             )
-        return subclass(row, pft_sheet)
+        return subclass(row, pft_sheet, default_ds)
+    
+    def validate(self, default_ds: xr.Dataset) -> None:
+        variables_to_check = self._variables_to_validate()
+        
+        for var in variables_to_check:
+            if var not in default_ds:
+                raise ValueError(
+                    f"Parameter '{self.spec.name}': variable '{var}' not found "
+                    f"in default dataset. Available variables: "
+                    f"{sorted(default_ds.data_vars)}"
+                )
+            actual_dims = list(default_ds[var].dims)
+            if actual_dims != self.spec.dims:
+                raise ValueError(
+                    f"Parameter '{self.spec.name}': variable '{var}' has dims "
+                    f"{actual_dims} in default dataset but spec.dims is "
+                    f"{self.spec.dims}. Dimensions must match exactly."
+                )
+        
+    def _variables_to_validate(self) -> list[str]:
+        """Returns parameter names this parameter touches.
+        
+        The default implementation covers DefaultParameter (spec.name) and any
+        type that uses base_params. Subclasses override only if they need different
+        logic (ScaleFromRootParameter also reads root_params)
+
+        Returns:
+            list[str]: list of actual parameters this parameter handle touches
+        """
+        if self.spec.base_params:
+            return self.spec.base_params
+        return [self.spec.name]
 
     @abstractmethod
     def get_default(
@@ -190,6 +255,14 @@ class SlicedParameter(Parameter, param_type="sliced"):
 
 class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
     """Parameter whose value is root + delta."""
+    
+    
+    def _variables_to_validate(self) -> list[str]:
+        """Include root_param in validation in addition to base_params."""
+        variables = list(self.spec.base_params)
+        if self.spec.root_param and self.spec.root_param not in variables:
+            variables.append(self.spec.root_param)
+        return variables
 
     def get_default(self, default_ds: xr.Dataset) -> np.ndarray:
         """Extract the relevant default value(s) from a parameter dataset.

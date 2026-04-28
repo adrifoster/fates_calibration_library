@@ -1,5 +1,5 @@
 """
-Bound types for FATES parameter min/max values
+Bound types for parameter min/max values
 
 A parameter's min and max can each be one of three things:
     - FixedBound    : a plain number, resolved immediately
