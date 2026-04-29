@@ -37,7 +37,7 @@ class ParamEnsemble(ABC):
     num_params: int
         number of parameters
     fixed_indices: dict[str, list[int]] | None
-        Run-level mapping of dimension name to 0-based indices to hold at
+        Mapping of dimension name to 0-based indices to hold at
         their default values across all ensemble members. For example,
         ``{'fates_pft': [7, 8, 9]}`` fixes PFTs 8, 9, and 10 (0-based).
         If None, all indices are free.
@@ -481,6 +481,18 @@ def _validate_fixed_indices(
     fixed_indices: dict[str, list[int]],
     default_ds: xr.Dataset,
 ) -> None:
+    """Check to make sure supplied fixed_indices dict is compatible with input
+    default parameter dataset
+
+    Args:
+        fixed_indices (dict[str, list[int]]):  Mapping of dimension 
+            name to 0-based indices to hold at default.
+        default_ds (xr.Dataset): Default parameter dataset.
+
+    Raises:
+        ValueError: fixed_indices dimension not found in dataset
+        ValueError: fixed_indices has out-of-range indices
+    """
     for dim, indices in fixed_indices.items():
         if dim not in default_ds.sizes:
             raise ValueError(
@@ -501,6 +513,17 @@ def _free_mask(
     free_dim: str | None,
     fixed_indices: dict[str, list[int]],
 ) -> np.ndarray | slice:
+    """Get an array mask of the fixed indices
+
+    Args:
+        arr (np.ndarray): input array
+        free_dim (str | None): dimension to scale along
+        fixed_indices (dict[str, list[int]]): Mapping of dimension 
+            name to 0-based indices to hold at default.
+
+    Returns:
+        np.ndarray | slice: mask
+    """
     if free_dim is None or arr.ndim == 0:
         return slice(None)
     fixed = fixed_indices.get(free_dim, [])

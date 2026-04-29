@@ -316,7 +316,7 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
 
 
 class JointParameter(Parameter, param_type="joint"):
-    """Calibration handle for multiple connected parameters (e.g. posterior draws)."""
+    """Parameter which stands for multiple connected parameters (e.g. posterior draws)."""
 
     def get_default(self, default_ds: xr.Dataset) -> list[np.ndarray]:
         """Extract the relevant default value(s) from a parameter dataset.
