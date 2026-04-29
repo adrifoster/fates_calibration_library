@@ -61,7 +61,7 @@ class Scaler(ABC):
             float | np.ndarray: The normalized parameter value.
         """
 
-class DefaultScaler(Scaler):
+class UniformScaler(Scaler):
     """Linearly interpolates between resolved min and max bounds.
 
     For a given normalized_val in [0, 1]:

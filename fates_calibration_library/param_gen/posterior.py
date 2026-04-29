@@ -9,18 +9,18 @@ and knows how to draw values from them.
 YAML format
 -----------
     fates_allom_agb:
-      variables: [fates_allom_agb1, fates_allom_agb2]
+      parameters: [fates_allom_agb1, fates_allom_agb2]
       files:
         - path: "jags_out/allom_agb_pft1.csv"
-          pft_indices: [0]
+          array_indices: [0]
         - path: "jags_out/allom_agb_pft2.csv"
-          pft_indices: [1, 2]
+          array_indices: [1, 2]
  
     fates_leafn_vert_scaler:
-      variables: [fates_leafn_vert_scaler_coeff1, fates_leafn_vert_scaler_coeff2]
+      parameters: [fates_leafn_vert_scaler_coeff1, fates_leafn_vert_scaler_coeff2]
       files:
         - path: "jags_out/leafn_scaler.csv"
-          pft_indices: "all"
+          array_indices: "all"
 
 Notes
 -----

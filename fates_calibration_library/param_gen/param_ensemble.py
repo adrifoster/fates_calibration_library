@@ -3,7 +3,6 @@ ParamEnsemble class - responsible for generating the entire ensemble
 """
 
 from __future__ import annotations
-from typing import Any
 from dataclasses import dataclass, fields
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -14,7 +13,7 @@ import xarray as xr
 
 from .posterior import PosteriorConfig
 from .parameter import Parameter
-from .scaler import DefaultScaler
+from .scaler import UniformScaler
 from .strategy import Strategy
 from .ensemble_config import EnsembleConfig, LatinHypercubeConfig, OneAtATimeConfig
 from .sort_params import sort_params
@@ -102,7 +101,7 @@ class ParamEnsemble(ABC):
 
         # set attributes
         self.file_prefix = config.file_prefix
-        self.default_ds = config.default_ds
+        self.default_ds = xr.open_dataset(config.default_param_file)
 
         # create sorted list of parameter objects
         # this automatically checks and sorts order to make sure anything
@@ -125,7 +124,7 @@ class ParamEnsemble(ABC):
             _validate_fixed_indices(self.fixed_indices, self.default_ds)
 
         # attach scaler
-        self.scaler = DefaultScaler()
+        self.scaler = UniformScaler()
 
     @classmethod
     def from_dict(
@@ -275,7 +274,7 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
         config: LatinHypercubeConfig,
     ):
         super().__init__(config)
-        self.n_samples = config.n_samples
+        self.n_samples = config.ensemble_members
         self.prebuilt = config.prebuilt
         self.posterior_configs: dict[str, PosteriorConfig] = {}
 
