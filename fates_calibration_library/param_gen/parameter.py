@@ -12,6 +12,8 @@ import xarray as xr
 
 from .param_spec import ParamSpec
 from .bounds import ParamBounds
+from .scaler import Scaler
+from .posterior import PosteriorConfig
 
 
 @dataclass
@@ -98,6 +100,54 @@ class Parameter(ABC):
                     f"{actual_dims} in default dataset but spec.dims is "
                     f"{self.spec.dims}. Dimensions must match exactly."
                 )
+    
+    def scale(self, normalized_value: float, default_ds: xr.Dataset, scaler: Scaler,
+              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
+        """Scale a parameter between its minimum and maximum bounds given and input
+        [0-1] value.
+
+        Args:
+            normalized_value (float): normalized value [0-1] used to scale between 
+                parameter minimum and maximum bounds
+            default_ds (xr.Dataset): default parameter dataset. used for validating
+                dimensions and indices
+            scaler (Scaler): Scaler object to do actual scaling math
+            fixed_indices (dict[str, list[int]]): Mapping of dimension 
+                name to 0-based indices to hold at default.
+
+        Returns:
+            float | np.ndarray: scaled parameter value
+        """
+        
+        default_val = self.get_default(default_ds)
+        free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
+        min_val, max_val = self.bounds.resolve(default_val)
+        
+        # apply mask - we only validate bounds on non-fixed indices
+        mask = _free_mask(default_val, free_dim, fixed_indices)
+        return scaler.scale(min_val, max_val, normalized_value, mask=mask)
+    
+    def posterior_draw(self, normalized_value: float, default_ds: xr.Dataset,
+                       posterior: PosteriorConfig) -> float | np.ndarray:
+        """Draw a parameter value from an input distribution given a 
+            normalized_value [0-1], used as a quantile index
+
+        Args:
+            normalized_value (float): normalized value [0-1] used as a quantile index
+            default_ds (xr.Dataset): default parameter dataset. used for validating
+                dimensions and indices
+            scaler (Scaler): Scaler object to do actual scaling math
+
+        Returns:
+            float | np.ndarray: scaled parameter value
+        """
+        
+        free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
+        array_index = (
+            self.active_index.index if self.active_index is not None else None
+        )
+        n_indices = default_ds.sizes.get(free_dim, 1)
+        return posterior.draw(normalized_value, array_index, n_indices)
         
     def _variables_to_validate(self) -> list[str]:
         """Returns parameter names this parameter touches.
@@ -429,3 +479,34 @@ def _as_scalar(value: float | np.ndarray, name: str) -> float:
             f"array of shape {arr.shape}. Pass a scalar or expand the spec."
         )
     return float(arr)
+
+
+def _free_mask(
+    arr: np.ndarray,
+    free_dim: str | None,
+    fixed_indices: dict[str, list[int]],
+) -> np.ndarray | slice:
+    """Get an array mask of the fixed indices
+
+    Args:
+        arr (np.ndarray): input array
+        free_dim (str | None): dimension to scale along
+        fixed_indices (dict[str, list[int]]): Mapping of dimension 
+            name to 0-based indices to hold at default.
+
+    Returns:
+        np.ndarray | slice: mask
+    """
+    
+    # nothing to mask (we have a float)
+    if free_dim is None or arr.ndim == 0:
+        return slice(None)
+   
+    # fixed indices doesn't exist on this dim
+    fixed = fixed_indices.get(free_dim, [])
+    if not fixed:
+        return slice(None)
+    
+    mask = np.ones(arr.shape[0], dtype=bool)
+    mask[fixed] = False
+    return mask

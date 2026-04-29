@@ -4,7 +4,7 @@ ParamEnsemble class - responsible for generating the entire ensemble
 
 from __future__ import annotations
 from typing import Any
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 from abc import ABC, abstractmethod
 import pandas as pd
@@ -16,14 +16,48 @@ from .posterior import PosteriorConfig
 from .parameter import Parameter
 from .scaler import DefaultScaler
 from .strategy import Strategy
-from .ensemble_config import EnsembleConfig, LatinHypercubeConfig
+from .ensemble_config import EnsembleConfig, LatinHypercubeConfig, OneAtATimeConfig
 from .sort_params import sort_params
 
+@dataclass
+class ParameterSample:
+    """A single parameter paired with its normalized sample value.
+    
+    Attributes
+    ----------
+    parameter: Parameter
+        The parameter being samples.
+    normalized_value: float
+        A value in [0, 1]. For uniform parameters this is passed to a scaler to produce
+        an actual value. For posterior parameters this is used as a quantile index into
+        the posterior distribution.
+    """
+    parameter: Parameter
+    normalized_value: float
+    
+@dataclass
+class EnsembleMemberSample:
+    """All parameter samples for one ensemble member
+    
+    Attributes
+    ----------
+    parameter_samples : list[ParameterSample]
+        One ParameterSample per parameter being varied in this ensemble member.
+    """
+    parameter_samples: list[ParameterSample]
+    
+    def __iter__(self):
+        """Iterate over the ParameterSamples in this member"""
+        return iter(self.parameter_samples)
+    
+    def __len__(self):
+        """Return the number of ParameterSamples in this member"""
+        return len(self.parameter_samples)
 
 class ParamEnsemble(ABC):
     """Abstract base class for the parameter ensemble class
 
-    Parameters
+    Attributes
     ----------
     ensemble_dir : Path
         Path to where parameter files will be written out
@@ -143,56 +177,8 @@ class ParamEnsemble(ABC):
                 f"Valid types: {sorted(cls._registry)}"
             )
         return subclass.from_config(config)
-
-    @classmethod
-    @abstractmethod
-    def from_config(cls, config: dict) -> ParamEnsemble:
-        """Construct this subclass from a config dict (ensemble_type already removed).
-
-        Implementations should construct the appropriate config dataclass
-        from the dict, then pass it to the constructor:
-
-        cfg = LatinHypercubeConfig(**config)
-        return cls(cfg)
-
-        Args:
-            config (dict): Config dict with 'ensemble_type' already popped.
-
-        Returns:
-            ParamEnsemble: A fully constructed ensemble subclass instance.
-        """
-
-    @abstractmethod
-    def create_samples(self) -> list[dict[Parameter, Any]]:
-        """Create samples from the list of parameters
-
-        Returns:
-            list[dict[Parameter, Any]]: list of dictionaries of Parameter and value to write
-        """
-
-    @abstractmethod
-    def create_ensemble_member(self, sample: dict[Parameter, Any]) -> xr.Dataset:
-        """Create one member of the ensemble
-
-        Args:
-            sample (dict[Parameter, Any]): dictionary of Parameter and value to write
-            files.
-        Returns:
-            xr.Dataset: one member of the ensemble with updated values from default
-        """
-
-    @abstractmethod
-    def create_ensemble_key(self, samples: list[dict[Parameter, Any]]) -> pd.DataFrame:
-        """Create the ensemble key that goes with this ensemble
-
-        Args:
-            samples (list[dict[Parameter, Any]]): list of dictionaries of Parameter and
-            value to write
-
-        Returns:
-            pd.DataFrame: output data frame that serves as ensemble key
-        """
-
+    
+    
     def create_ensemble(self):
         """Create and write out all ensemble parameter files
 
@@ -215,6 +201,56 @@ class ParamEnsemble(ABC):
             list(ensemble_key.ensemble.values),
         )
 
+
+    @classmethod
+    @abstractmethod
+    def from_config(cls, config: dict) -> ParamEnsemble:
+        """Construct this subclass from a config dict (ensemble_type already removed).
+
+        Implementations should construct the appropriate config dataclass
+        from the dict, then pass it to the constructor:
+
+        cfg = LatinHypercubeConfig(**config)
+        return cls(cfg)
+
+        Args:
+            config (dict): Config dict with 'ensemble_type' already popped.
+
+        Returns:
+            ParamEnsemble: A fully constructed ensemble subclass instance.
+        """
+
+    @abstractmethod
+    def create_samples(self) -> list[EnsembleMemberSample]:
+        """Create samples from the list of parameters
+
+        Returns:
+            list[EnsembleMemberSample]: One EnsembleMemberSample per ensemble member, 
+            each containing one ParameterSample per parameter.
+        """
+
+    @abstractmethod
+    def create_ensemble_member(self, sample: EnsembleMemberSample) -> xr.Dataset:
+        """Create one member of the ensemble
+
+        Args:
+            sample (EnsembleMemberSample): Parameter samples for this member. 
+                Contains one ParameterSample per parameter.
+        Returns:
+            xr.Dataset: one member of the ensemble with updated values from default
+        """
+
+    @abstractmethod
+    def create_ensemble_key(self, samples: list[EnsembleMemberSample]) -> pd.DataFrame:
+        """Create the ensemble key that goes with this ensemble
+
+        Args:
+            samples (list[EnsembleMemberSample]): One EnsembleMemberSample per ensemble 
+                member, each containing one ParameterSample per parameter.
+
+        Returns:
+            pd.DataFrame: output data frame that serves as ensemble key
+        """
 
 class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
     """Concrete class for the Latin Hypercube ensemble class
@@ -270,101 +306,92 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
             ) from e
         return cls(cfg)
 
-    def create_samples(self) -> list[dict[Parameter, Any]]:
+    def create_samples(self) -> list[EnsembleMemberSample]:
         """Create samples from the list of parameters
 
         Returns:
-            list[dict[Parameter, Any]]: list of dictionaries of Parameter and value to
-            write
+            list[EnsembleMemberSample]: One EnsembleMemberSample per ensemble member, 
+            each containing one ParameterSample per parameter.
         """
-
-        # check posterior params and prepare
-        posterior_params = [
-            param for param in self.params if param.spec.strategy is Strategy.POSTERIOR
-        ]
-        if len(posterior_params) > 0:
-            if not self.posterior_configs:
-                raise RuntimeError(
-                    "Parameter ensemble does not have any posterior sources yet."
-                    "run ParamEnsemble.attach_configs('yaml_path')"
-                )
-            for param in posterior_params:
-                if param.spec.name not in self.posterior_configs:
-                    raise RuntimeError(
-                        f"parameter '{param.spec.name}' has strategy='posterior' but is not in"
-                        "posterior_configs - check input yaml and re-run attach_configs"
-                    )
-            for _, config in self.posterior_configs.items():
-                config.prepare(self.n_samples)
-
+        
+        # validate and prepare posterior distributions
+        self.prepare_posteriors()
+        
         # build latin hypercube
         latin_hypercube = self.build_lh(len(self.params), self.prebuilt)
 
         # draw samples
         samples = []
         for i in range(self.n_samples):
-            sample: dict[Parameter, Any] = {}
-
-            for j, param in enumerate(self.params):
-                sample[param] = float(latin_hypercube[i, j])
-
-            samples.append(sample)
+            ensemble_member = EnsembleMemberSample(
+                parameter_samples = [
+                    ParameterSample(
+                        parameter=param,
+                        normalized_value=float(latin_hypercube[i, j]),
+                    )
+                    for j, param in enumerate(self.params)
+                ]
+            )
+            samples.append(ensemble_member)
 
         return samples
 
-    def create_ensemble_member(self, sample: dict[Parameter, Any]) -> xr.Dataset:
+    def create_ensemble_member(self, sample: EnsembleMemberSample) -> xr.Dataset:
         """Create one member of the ensemble
 
         Args:
-            sample (dict[Parameter, Any]): dictionary of Parameter and value to write
+            sample (EnsembleMemberSample): Parameter samples for this member. 
+                Contains one ParameterSample per parameter.
         Returns:
             xr.Dataset: one member of the ensemble with updated values from default
         """
+        
         ds = self.default_ds.copy(deep=False)
-        for param, sample_value in sample.items():
-            default_val = param.get_default(self.default_ds)
-            free_dim = param.spec.free_dims[0] if param.spec.free_dims else None
-
+        
+        for param_sample in sample:
+            param = param_sample.parameter
+            normalized_value = param_sample.normalized_value
+            
             if param.spec.strategy is Strategy.UNIFORM:
-                mask = _free_mask(default_val, free_dim, self.fixed_indices)
-                min_val, max_val = param.bounds.resolve(default_val)
-                value = self.scaler.scale(min_val, max_val, sample_value, mask=mask)
+                
+                value = param.scale(normalized_value, self.default_ds, self.scaler,
+                            self.fixed_indices)
+            
             elif param.spec.strategy is Strategy.POSTERIOR:
-                array_index = (
-                    param.active_index.index if param.active_index is not None else None
-                )
-                n_indices = self.default_ds.sizes.get(free_dim, 1)
-                value = self.posterior_configs[param.spec.name].draw(
-                    sample_value, array_index, n_indices
-                )
+            
+                value = param.posterior_draw(normalized_value, self.default_ds,
+                       self.posterior_configs[param.spec.name])
+            
             else:
                 raise ValueError(
                     f"Not sure how to use parameter strategy {param.spec.strategy}."
                     "Add logic here."
                 )
+            
             param.set_value(
                 ds, self.default_ds, value, fixed_indices=self.fixed_indices
             )
 
         return ds
 
-    def create_ensemble_key(self, samples: list[dict[Parameter, Any]]) -> pd.DataFrame:
+    def create_ensemble_key(self, samples: list[EnsembleMemberSample]) -> pd.DataFrame:
         """Create the ensemble key that goes with this ensemble
 
         Args:
-            samples (list[dict[Parameter, Any]]): list of dictionaries of Parameter and
-            value to write
+            samples (list[EnsembleMemberSample]): One EnsembleMemberSample per ensemble 
+                member, each containing one ParameterSample per parameter.
 
         Returns:
             pd.DataFrame: output data frame that serves as ensemble key
         """
+        
         param_dfs = []
         for i, sample in enumerate(samples):
             parameter_names = []
             sample_values = []
-            for param, sample_value in sample.items():
-                parameter_names.append(param.spec.name)
-                sample_values.append(sample_value)
+            for param_sample in sample:
+                parameter_names.append(param_sample.parameter.spec.name)
+                sample_values.append(param_sample.normalized_value)
             df = pd.DataFrame({"parameter": parameter_names, "value": sample_values})
             df["ensemble"] = f"{self.file_prefix}_{_generate_suffix(i)}"
             param_dfs.append(df)
@@ -426,7 +453,177 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
                     "entry in posterior_sources.yaml."
                 )
         self.posterior_configs = configs
+    
+    def prepare_posteriors(self):
+        """Validate that every posterior parameter has a PosteriorConfig attached and 
+        then prepare the datasets
 
+        Raises:
+            RuntimeError: No posterior sources yet. Need to attach_configs
+            RuntimeError: parameter not in sources
+        """
+        posterior_params = [
+            param for param in self.params if param.spec.strategy is Strategy.POSTERIOR
+        ]
+        if len(posterior_params) > 0:
+            if not self.posterior_configs:
+                raise RuntimeError(
+                    "Parameter ensemble does not have any posterior sources yet."
+                    "run ParamEnsemble.attach_configs('yaml_path')"
+                )
+            for param in posterior_params:
+                if param.spec.name not in self.posterior_configs:
+                    raise RuntimeError(
+                        f"parameter '{param.spec.name}' has strategy='posterior' but is not in"
+                        "posterior_configs - check input yaml and re-run attach_configs"
+                    )
+            for _, config in self.posterior_configs.items():
+                config.prepare(self.n_samples)
+
+        
+class OneAtATimeParameterEnsemble(ParamEnsemble, ensemble_type="OAT"):
+    """Concrete class for the One-at-a-time (OAT) ensemble class
+    """
+
+    def __init__(
+        self,
+        config: OneAtATimeConfig,
+    ):
+        super().__init__(config)
+        self._check_no_posterior_params()
+        
+    def _check_no_posterior_params(self):
+        """Raise if any parameter uses the posterior strategy.
+
+        Raises:
+            ValueError: If any parameter has strategy=POSTERIOR.
+        """
+        posterior_params = [
+            param.spec.name for param in self.params
+            if param.spec.strategy is Strategy.POSTERIOR
+        ]
+        if posterior_params:
+            raise ValueError(
+                "OneAtATimeEnsemble does not support posterior parameters. "
+                f"Found posterior parameters: {posterior_params}. "
+                "Remove them from the parameter list or use a different ensemble type." 
+            )
+        
+    @classmethod
+    def from_config(cls, config: dict) -> OneAtATimeParameterEnsemble:
+        """Construct from a plain dict (ensemble_type already removed)
+
+        Args:
+            config (dict): Must contain all required ``OneAtATimeConfig`` fields.
+            Unrecognised keys raise ``TypeError``.
+
+        Raises:
+            TypeError: Uncrecogized or missing keys
+
+        Returns:
+            OneAtATimeParameterEnsemble: A fully constructed ensemble OneAtATimeParameterEnsemble
+            instance.
+        """
+        try:
+            cfg = OneAtATimeConfig(**config)
+        except TypeError as e:
+            raise TypeError(
+                f"Invalid config key for LatinHypercubeEnsemble: {e}. "
+                f"Valid keys: {[f.name for f in fields(OneAtATimeConfig)]}"
+            ) from e
+        return cls(cfg)
+    
+    
+    def create_samples(self) -> list[EnsembleMemberSample]:
+        """Create samples from the list of parameters
+
+        Returns:
+            list[EnsembleMemberSample]: One EnsembleMemberSample per ensemble member, 
+            each containing one ParameterSample per parameter.
+        """
+        
+        samples = []
+        for param in self.params:
+            samples.append(
+                EnsembleMemberSample([ParameterSample(param, 0.0)]) # minimum
+            )
+            samples.append(
+                EnsembleMemberSample([ParameterSample(param, 1.0)]) # maximum
+            )
+        return samples
+    
+    
+    def create_ensemble_member(self, sample: EnsembleMemberSample) -> xr.Dataset:
+        """Create one member of the ensemble
+
+        Args:
+            sample (EnsembleMemberSample): Parameter samples for this member. 
+                Contains one ParameterSample per parameter.
+        Returns:
+            xr.Dataset: one member of the ensemble with updated values from default
+        """
+        if len(sample) != 1:
+            raise ValueError (
+                f"OneAtATimeEnsemble expects exactly one ParameterSample per member "
+                f"but got {len(sample)}."
+            )
+        
+        param_sample = sample.parameter_samples[0]
+        param = param_sample.parameter
+        normalized_value = param_sample.normalized_value
+        
+        ds = self.default_ds.copy(deep=False)
+        value = param.scale(normalized_value, self.default_ds, self.scaler,
+                            self.fixed_indices)
+        param.set_value(ds, self.default_ds, value, fixed_indices=self.fixed_indices)
+            
+        return ds
+    
+    
+    def create_ensemble_key(self, samples: list[EnsembleMemberSample]) -> pd.DataFrame:
+        """Create the ensemble key that goes with this ensemble
+
+        Args:
+            samples (list[EnsembleMemberSample]): One EnsembleMemberSample per ensemble 
+                member, each containing one ParameterSample per parameter.
+
+        Returns:
+            pd.DataFrame: output data frame that serves as ensemble key
+        """
+        parameter_names = []
+        ensembles = []
+        values = []
+        for i, sample in enumerate(samples):
+            if len(sample) != 1:
+                raise ValueError (
+                    f"OneAtATimeEnsemble expects exactly one ParameterSample per member "
+                    f"but got {len(sample)}."
+                )
+            
+            param_sample = sample.parameter_samples[0]
+            param = param_sample.parameter
+            normalized_value = param_sample.normalized_value
+            parameter_names.append(param.spec.name)
+            values.append(normalized_value)
+            ensembles.append(f"{self.file_prefix}_{_generate_suffix(i)}")
+
+        param_df = pd.DataFrame({
+            "ensemble": ensembles,
+            "parameter": parameter_names, 
+            "normalized_value": values
+            })
+        
+        param_df['direction'] = param_df.normalized_value.map({0.0: 'minimum', 1.0: 'maximum'})
+        nan_mask = param_df['direction'].isna()
+        if nan_mask.any():
+            raise ValueError (
+                f"OneAtATimeEnsemble expects only 0.0 or 1.0 normalized values but found "
+                f"{param_df[nan_mask]}"
+                f"In the ensemble key"
+            )
+        return param_df.drop(columns=['normalized_value'])
+    
+    
 
 def _read_param_list(
     param_data_file: Path,
@@ -507,28 +704,3 @@ def _validate_fixed_indices(
                 f"Dimension '{dim}' has size {dim_size} (valid: 0–{dim_size - 1})."
             )
 
-
-def _free_mask(
-    arr: np.ndarray,
-    free_dim: str | None,
-    fixed_indices: dict[str, list[int]],
-) -> np.ndarray | slice:
-    """Get an array mask of the fixed indices
-
-    Args:
-        arr (np.ndarray): input array
-        free_dim (str | None): dimension to scale along
-        fixed_indices (dict[str, list[int]]): Mapping of dimension 
-            name to 0-based indices to hold at default.
-
-    Returns:
-        np.ndarray | slice: mask
-    """
-    if free_dim is None or arr.ndim == 0:
-        return slice(None)
-    fixed = fixed_indices.get(free_dim, [])
-    if not fixed:
-        return slice(None)
-    mask = np.ones(arr.shape[0], dtype=bool)
-    mask[fixed] = False
-    return mask
