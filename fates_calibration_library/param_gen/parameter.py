@@ -72,7 +72,7 @@ class Parameter(ABC):
         default_ds: xr.Dataset | None = None,
     ) -> Parameter:
         """Construct the correct Parameter subclass from a spreadsheet row."""
-        param_type = str(row.get("param_type", "default")).strip()
+        param_type = str(row.get("param_type", "")).strip()
         subclass = cls._registry.get(param_type)
         if subclass is None:
             raise ValueError(

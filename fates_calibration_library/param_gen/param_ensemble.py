@@ -3,8 +3,8 @@ ParamEnsemble class - responsible for generating the entire ensemble
 """
 
 from __future__ import annotations
-from typing import Any, Optional
-import copy
+from typing import Any
+from dataclasses import fields
 from pathlib import Path
 from abc import ABC, abstractmethod
 import pandas as pd
@@ -14,44 +14,153 @@ import xarray as xr
 
 from .posterior import PosteriorConfig
 from .parameter import Parameter
-from .parameter import DimIndex
 from .scaler import DefaultScaler
 from .strategy import Strategy
+from .ensemble_config import EnsembleConfig, LatinHypercubeConfig
+from .sort_params import sort_params
 
 
 class ParamEnsemble(ABC):
-    """Abstract base class for the parameter ensemble class"""
+    """Abstract base class for the parameter ensemble class
+
+    Parameters
+    ----------
+    ensemble_dir : Path
+        Path to where parameter files will be written out
+    file_prefix: str
+        Prefix for output filenames, e.g. 'my_ensemble' produces 'my_ensemble_0001.nc', etc.
+    default_ds: xr.DataFrame
+        Default parameter dataset. Used as the base for all ensemble
+        members and for parameter validation at construction time.
+    params: list[Parameter]
+        list of Parameter objects to sample
+    num_params: int
+        number of parameters
+    fixed_indices: dict[str, list[int]] | None
+        Run-level mapping of dimension name to 0-based indices to hold at
+        their default values across all ensemble members. For example,
+        ``{'fates_pft': [7, 8, 9]}`` fixes PFTs 8, 9, and 10 (0-based).
+        If None, all indices are free.
+    scaler: DefaultScaler
+        used for scaling parameters between a min and max bound
+    """
+
+    _registry: dict[str, type[ParamEnsemble]] = {}
+
+    def __init_subclass__(cls, ensemble_type: str, **kwargs):
+        super().__init_subclass__(**kwargs)
+        ParamEnsemble._registry[ensemble_type] = cls
 
     def __init__(
         self,
-        param_data_file: Path,
-        ensemble_dir: Path,
-        file_prefix: str,
-        param_list: Optional[list[str]] = None,
+        config: EnsembleConfig,
     ):
-        
-        ## TODO: re-order main correctly and then also enforce the order
-        ## of the create_ensemble_member for scale_from_root
-        main, pft_sheets = _read_param_list(param_data_file)
+
+        main, pft_sheets = _read_param_list(config.param_data_file)
 
         # subset to only a list of parameters if supplied
-        if param_list is not None:
-            main = main[main.parameter_name.isin(param_list)].copy()
+        if config.param_list is not None:
+            main = main[main.parameter_name.isin(config.param_list)].copy()
 
-        self.ensemble_dir = Path(ensemble_dir)
+        # create output directory if it doesn't exit yet
+        self.ensemble_dir = Path(config.ensemble_dir)
         self.ensemble_dir.mkdir(parents=True, exist_ok=True)
-        self.file_prefix = file_prefix
-        self.main = main
-        self.pft_sheets = pft_sheets
-        self.params = [
-            Parameter.from_row(
-                row, pft_sheet=self.pft_sheets.get(row["parameter_name"])
-            )
-            for _, row in self.main.iterrows()
-        ]
+
+        # set attributes
+        self.file_prefix = config.file_prefix
+        self.default_ds = config.default_ds
+
+        # create sorted list of parameter objects
+        # this automatically checks and sorts order to make sure anything
+        # that depends on another parameter is either not being modified or
+        # gets written first
+        self.params = sort_params(
+            [
+                Parameter.from_row(
+                    row,
+                    pft_sheet=pft_sheets.get(row["parameter_name"]),
+                    default_ds=self.default_ds,
+                )
+                for _, row in main.iterrows()
+            ]
+        )
         self.num_params = len(self.params)
+
+        self.fixed_indices: dict[str, list[int]] = config.fixed_indices or {}
+        if self.fixed_indices:
+            _validate_fixed_indices(self.fixed_indices, self.default_ds)
+
+        # attach scaler
         self.scaler = DefaultScaler()
-        self._posterior_configs: dict[str, PosteriorConfig] = {}
+
+    @classmethod
+    def from_dict(
+        cls,
+        config: dict,
+    ) -> ParamEnsemble:
+        """Construct the correct ParamEnsemble subclass from an input configuration dict.
+
+        The dict must contain an ``'ensemble_type'`` key whose value matches
+        a registered subclass (e.g. ``'LatinHypercube'``). All other keys
+        are passed to the corresponding config dataclass.
+
+        Args:
+            config (dict): Configuration dictionary. Example::
+
+            {
+                'ensemble_type': 'LatinHypercube',
+                'param_data_file': 'params.xlsx',
+                'ensemble_dir': 'output/',
+                'file_prefix': 'my_run',
+                'default_ds': ds,
+                'n_samples': 200,
+                'fixed_indices': {'fates_pft': [7, 8, 9]},
+                'posterior_sources': 'posteriors.yaml',
+
+            }
+        Raises:
+            ValueError
+                If ``'ensemble_type'`` is missing or not a registered type.
+            TypeError
+                If the config dict contains keys not recognised by the config
+                dataclass (misspelled or unsupported options).
+        Returns:
+            ParamEnsemble: A fully constructed ensemble subclass instance.
+        """
+        config = config.copy()
+
+        ensemble_type = config.pop("ensemble_type", None)
+        if ensemble_type is None:
+            raise ValueError(
+                "'ensemble_type' is required in the config dict. "
+                f"Valid types: {sorted(cls._registry)}"
+            )
+
+        subclass = cls._registry.get(ensemble_type)
+        if subclass is None:
+            raise ValueError(
+                f"Unknown ensemble_type '{ensemble_type}'. "
+                f"Valid types: {sorted(cls._registry)}"
+            )
+        return subclass.from_config(config)
+
+    @classmethod
+    @abstractmethod
+    def from_config(cls, config: dict) -> ParamEnsemble:
+        """Construct this subclass from a config dict (ensemble_type already removed).
+
+        Implementations should construct the appropriate config dataclass
+        from the dict, then pass it to the constructor:
+
+        cfg = LatinHypercubeConfig(**config)
+        return cls(cfg)
+
+        Args:
+            config (dict): Config dict with 'ensemble_type' already popped.
+
+        Returns:
+            ParamEnsemble: A fully constructed ensemble subclass instance.
+        """
 
     @abstractmethod
     def create_samples(self) -> list[dict[Parameter, Any]]:
@@ -62,174 +171,106 @@ class ParamEnsemble(ABC):
         """
 
     @abstractmethod
-    def create_ensemble_member(
-        self, sample: dict[Parameter, Any], default_ds: xr.Dataset
-    ) -> xr.Dataset:
+    def create_ensemble_member(self, sample: dict[Parameter, Any]) -> xr.Dataset:
         """Create one member of the ensemble
 
         Args:
             sample (dict[Parameter, Any]): dictionary of Parameter and value to write
-            default_ds (xr.Dataset): Default parameter dataset. Used as base of updated
             files.
         Returns:
             xr.Dataset: one member of the ensemble with updated values from default
         """
-    
+
     @abstractmethod
     def create_ensemble_key(self, samples: list[dict[Parameter, Any]]) -> pd.DataFrame:
         """Create the ensemble key that goes with this ensemble
 
         Args:
-            samples (list[dict[Parameter, Any]]): list of dictionaries of Parameter and value to write
+            samples (list[dict[Parameter, Any]]): list of dictionaries of Parameter and
+            value to write
 
         Returns:
             pd.DataFrame: output data frame that serves as ensemble key
         """
 
-    def create_ensemble(self, default_ds: xr.Dataset):
+    def create_ensemble(self):
         """Create and write out all ensemble parameter files
 
         Args:
-            default_ds (xr.Dataset): default parameter dataset. Used as base for all
             ensemble parameter files.
         """
         samples = self.create_samples()
         for i, sample in enumerate(samples):
-            ds = self.create_ensemble_member(sample, default_ds)
+            ds = self.create_ensemble_member(sample)
             file_name = f"{self.file_prefix}_{_generate_suffix(i)}.nc"
             ds.to_netcdf(self.ensemble_dir / file_name)
             ds.close()
-        
+
         ensemble_key = self.create_ensemble_key(samples)
         ensemble_key.to_csv(self.ensemble_dir / f"{self.file_prefix}_key.csv")
-        
-        _write_ensemble_list(self.ensemble_dir, self.file_prefix,
-                             list(ensemble_key.ensemble.values))
 
-    def expand(
-        self,
-        default_ds: xr.Dataset,
-        fixed_indices: Optional[dict[str, list[int]]] = None,
-    ) -> list[Parameter]:
-        """Expand list of Parameter objects into one Parameter per active index.
-
-        Args:
-            default_ds (xr.Dataset): Default parameter dataset. Used to determine the
-                full set of valid indices for each dimension, and to validate
-                active_indices.
-            fixed_indices (Optional[dict[str, list[int]]], optional): Mapping of dimension
-                name to 0-based indices to hold at default. These are never expanded into
-                specs. If None, no indices are fixed and all are expanded over.
-
-        Returns:
-            list[Parameter]: Expanded Parameter list. Unexpanded Parameters are returned
-            unchanged. Expanded Parameters are shallow copies with active_index set to a
-            DimIndex.
-
-        Raises:
-            ValueError
-                If fixed_indices references unknown dimensions or out-of-range indices.
-            ValueError
-                If a spec with expand_by_index=True has no free_dims.
-        """
-        fixed = fixed_indices or {}
-        full_index_map = _build_full_index_map(default_ds)
-        _validate_fixed(fixed, full_index_map)
-
-        result = []
-        for param in self.params:
-            result.extend(self.expand_param(param, fixed, full_index_map))
-        return result
-
-    @staticmethod
-    def expand_param(
-        param: Parameter,
-        fixed: dict[str, list[int]],
-        full_index_map: dict[str, list[int]],
-    ) -> list[Parameter]:
-        """Return one expanded copy of Paremeter per active index of free_dims[0].
-
-        Args:
-            param (Parameter): parameter to expand
-            fixed (dict[str, list[int]]): mapping of dim to indices of indices to fix
-            full_index_map (dict[str, list[int]]): full available dim: indes mapping
-
-        Raises:
-            ValueError: no free dims to expand over
-            ValueError: dimension not fouond in default_ds
-
-        Returns:
-            list[Parameter]: expanded copy of Parameters
-        """
-        if not param.spec.free_dims:
-            raise ValueError(
-                f"Parameter '{param.spec.name}' has no " "free_dims to expand over."
-            )
-
-        # expand over the first free dimension
-        expand_dim = param.spec.free_dims[0]
-
-        if expand_dim not in full_index_map:
-            # dimension exists on the spec but not in default_ds — shouldn't
-            # happen if the netCDF file and spreadsheet are consistent
-            raise ValueError(
-                f"Parameter '{param.spec.name}': free dimension '{expand_dim}' not "
-                f"found in default_ds. Available dimensions: {sorted(full_index_map)}"
-            )
-
-        fixed_for_dim = fixed.get(expand_dim, [])
-        active = [i for i in full_index_map[expand_dim] if i not in fixed_for_dim]
-
-        expanded = []
-        for idx in active:
-            # here clone.spec points to the same ParamSpec as original,
-            # which is intentional
-            clone = copy.copy(param)
-            clone.active_index = DimIndex(dim=expand_dim, index=idx)
-            expanded.append(clone)
-
-        return expanded
-    
-    def attach_posteriors(self, yaml_path: Path) -> None:
-        """Load posterior configs from YAML
-
-        Args:
-            yaml_path (Path): Path to posterior_sources.yaml.
-
-        Raises:
-            ValueError: If a config entry has no matching Parameter
-        """
-        configs = PosteriorConfig.from_yaml(yaml_path)
-        posterior_params = [p for p in self.params if p.spec.strategy == "posterior"]
-        for param in posterior_params:
-            if param.spec.name not in configs:
-                raise ValueError(
-                    f"parameter '{param.spec.name}' has strategy='posterior' but no "
-                    "entry in posterior_sources.yaml."
-                )
-        self._posterior_configs = configs
-        
+        _write_ensemble_list(
+            self.ensemble_dir,
+            self.file_prefix,
+            list(ensemble_key.ensemble.values),
+        )
 
 
-class LatinHypercubeEnsemble(ParamEnsemble):
-    """Concrete class for a Latin Hypercube ensemble"""
+class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
+    """Concrete class for the Latin Hypercube ensemble class
+
+    Parameters
+    ----------
+    n_samples : int
+        number of ensemble members to generate. Each member corresponds
+        to one row of the Latin Hypercube sample matrix.
+    prebuilt: np.ndarray | None
+        Optional pre-built Latin Hypercube sample matrix of shape
+        (n_samples, n_params). If supplied, this matrix is used directly
+        instead of generating a new one. Useful for reproducibility or
+        when the LH matrix was generated externally.
+    posterior_configs: dict[str, PosteriorConfig]
+        PosteriorConfig objects for pulling from a distribution
+
+    """
 
     def __init__(
         self,
-        param_data_file: Path,
-        ensemble_dir: Path,
-        file_prefix: str,
-        n_samples: int,
-        param_list: Optional[list[str]] = None,
-        prebuilt: Optional[np.ndarray] = None,
+        config: LatinHypercubeConfig,
     ):
-        super().__init__(
-            param_data_file, ensemble_dir, file_prefix, param_list=param_list
-        )
-        self.n_samples = n_samples
-        self.prebuilt = prebuilt
+        super().__init__(config)
+        self.n_samples = config.n_samples
+        self.prebuilt = config.prebuilt
+        self.posterior_configs: dict[str, PosteriorConfig] = {}
 
-    def create_samples(self, default_ds) -> list[dict[Parameter, Any]]:
+        if config.posterior_sources:
+            self.attach_posteriors(config.posterior_sources)
+
+    @classmethod
+    def from_config(cls, config: dict) -> LatinHypercubeEnsemble:
+        """Construct from a plain dict (ensemble_type already removed)
+
+        Args:
+            config (dict): Must contain all required ``LatinHypercubeConfig`` fields.
+            Unrecognised keys raise ``TypeError``.
+
+        Raises:
+            TypeError: Uncrecogized or missing keys
+
+        Returns:
+            LatinHypercubeEnsemble: A fully constructed ensemble LatinHypercubeEnsemble
+            instance.
+        """
+        try:
+            cfg = LatinHypercubeConfig(**config)
+        except TypeError as e:
+            raise TypeError(
+                f"Invalid config key for LatinHypercubeEnsemble: {e}. "
+                f"Valid keys: {[f.name for f in fields(LatinHypercubeConfig)]}"
+            ) from e
+        return cls(cfg)
+
+    def create_samples(self) -> list[dict[Parameter, Any]]:
         """Create samples from the list of parameters
 
         Returns:
@@ -237,72 +278,73 @@ class LatinHypercubeEnsemble(ParamEnsemble):
             write
         """
 
-        # build latin hypercube
-        latin_hypercube = self.build_lh(len(self.params), self.prebuilt)
-                
-        # set up and check posterior params
-        posterior_params = [p for p in self.params if p.spec.strategy == "posterior"]
+        # check posterior params and prepare
+        posterior_params = [
+            param for param in self.params if param.spec.strategy is Strategy.POSTERIOR
+        ]
         if len(posterior_params) > 0:
-            if not self._posterior_configs:
+            if not self.posterior_configs:
                 raise RuntimeError(
-                        f"Parameter ensemble does not have any posterior sources yet -"
-                        "run ParamEnsemble.attach_configs('yaml_path')"
-                    )
+                    "Parameter ensemble does not have any posterior sources yet."
+                    "run ParamEnsemble.attach_configs('yaml_path')"
+                )
             for param in posterior_params:
-                if param.spec.name not in self._posterior_configs:
+                if param.spec.name not in self.posterior_configs:
                     raise RuntimeError(
                         f"parameter '{param.spec.name}' has strategy='posterior' but is not in"
                         "posterior_configs - check input yaml and re-run attach_configs"
                     )
-            for name, config in self._posterior_configs.items():
+            for _, config in self.posterior_configs.items():
                 config.prepare(self.n_samples)
-        
-        
+
+        # build latin hypercube
+        latin_hypercube = self.build_lh(len(self.params), self.prebuilt)
+
         # draw samples
         samples = []
         for i in range(self.n_samples):
             sample: dict[Parameter, Any] = {}
 
             for j, param in enumerate(self.params):
-                lh_value = latin_hypercube[i, j]
-                
-                if param.spec.strategy == 'uniform':
-                    sample[param] = float(lh_value)
-                elif param.spec.strategy == 'posterior':
-                    
-                    ## FIX THIS
-                    array_index = (
-                         param.active_index.index if param.active_index is not None else None
-                        )
-                    free_dim = param.spec.free_dims[0] if param.spec.free_dims else None
-                    n_indices = default_ds.sizes.get(free_dim, 1)
-                    sample[param] = self._posterior_configs[param.spec.name].draw(lh_value, array_index, n_indices)
+                sample[param] = float(latin_hypercube[i, j])
 
             samples.append(sample)
 
         return samples
 
-    def create_ensemble_member(
-        self, sample: dict[Parameter, Any], default_ds: xr.Dataset
-    ) -> xr.Dataset:
+    def create_ensemble_member(self, sample: dict[Parameter, Any]) -> xr.Dataset:
         """Create one member of the ensemble
 
         Args:
             sample (dict[Parameter, Any]): dictionary of Parameter and value to write
-            default_ds (xr.Dataset): Default parameter dataset. Used as base of updated
-            files.
         Returns:
             xr.Dataset: one member of the ensemble with updated values from default
         """
-        ds = default_ds.copy(deep=False)
+        ds = self.default_ds.copy(deep=False)
         for param, sample_value in sample.items():
-            default_val = param.get_default(default_ds)
-            if param.spec.strategy == "uniform":
-                value = self.scaler.scale(param.spec, sample_value, default_val)
-            elif param.spec.strategy == "posterior":
-                # passing on this for now
-                continue
-            param.set_value(ds, default_ds, value)
+            default_val = param.get_default(self.default_ds)
+            free_dim = param.spec.free_dims[0] if param.spec.free_dims else None
+
+            if param.spec.strategy is Strategy.UNIFORM:
+                mask = _free_mask(default_val, free_dim, self.fixed_indices)
+                min_val, max_val = param.bounds.resolve(default_val)
+                value = self.scaler.scale(min_val, max_val, sample_value, mask=mask)
+            elif param.spec.strategy is Strategy.POSTERIOR:
+                array_index = (
+                    param.active_index.index if param.active_index is not None else None
+                )
+                n_indices = self.default_ds.sizes.get(free_dim, 1)
+                value = self.posterior_configs[param.spec.name].draw(
+                    sample_value, array_index, n_indices
+                )
+            else:
+                raise ValueError(
+                    f"Not sure how to use parameter strategy {param.spec.strategy}."
+                    "Add logic here."
+                )
+            param.set_value(
+                ds, self.default_ds, value, fixed_indices=self.fixed_indices
+            )
 
         return ds
 
@@ -310,7 +352,8 @@ class LatinHypercubeEnsemble(ParamEnsemble):
         """Create the ensemble key that goes with this ensemble
 
         Args:
-            samples (list[dict[Parameter, Any]]): list of dictionaries of Parameter and value to write
+            samples (list[dict[Parameter, Any]]): list of dictionaries of Parameter and
+            value to write
 
         Returns:
             pd.DataFrame: output data frame that serves as ensemble key
@@ -363,6 +406,27 @@ class LatinHypercubeEnsemble(ParamEnsemble):
         # otherwise generate one
         return qmc.LatinHypercube(d=n_lh_dims).random(n=self.n_samples)
 
+    def attach_posteriors(self, yaml_path: Path) -> None:
+        """Load posterior configs from YAML
+
+        Args:
+            yaml_path (Path): Path to posterior_sources.yaml.
+
+        Raises:
+            ValueError: If a config entry has no matching Parameter
+        """
+        configs = PosteriorConfig.from_yaml(yaml_path)
+        posterior_params = [
+            param for param in self.params if param.spec.strategy is Strategy.POSTERIOR
+        ]
+        for param in posterior_params:
+            if param.spec.name not in configs:
+                raise ValueError(
+                    f"parameter '{param.spec.name}' has strategy='posterior' but no "
+                    "entry in posterior_sources.yaml."
+                )
+        self.posterior_configs = configs
+
 
 def _read_param_list(
     param_data_file: Path,
@@ -385,47 +449,6 @@ def _read_param_list(
         if sheet != "main":
             pft_sheets[f"fates_{sheet}"] = pd.read_excel(xl, sheet_name=sheet)
     return main, pft_sheets
-
-
-def _build_full_index_map(default_ds: xr.Dataset) -> dict[str, list[int]]:
-    """Build a map of all dimension names to all valid 0-based indices.
-
-    Args:
-        default_ds (xr.Dataset): input default parameter dataset
-
-    Returns:
-        dict[str, list[int]]: output dictionary mapping
-    """
-    return {dim: list(range(default_ds.sizes[dim])) for dim in default_ds.dims}
-
-
-def _validate_fixed(
-    fixed: dict[str, list[int]],
-    full_index_map: dict[str, list[int]],
-):
-    """Raise if fixed_indices references unknown dims or out-of-range indices.
-
-    Args:
-        fixed (dict[str, list[int]]): input mapping of dim to indices of fixed indices
-        full_index_map (dict[str, list[int]]): full available mapping of dim to indices
-
-    Raises:
-        ValueError: fixed_indices has dimension which does not exist in default_ds
-        ValueError: out of range index
-    """
-    for dim, idxs in fixed.items():
-        if dim not in full_index_map:
-            raise ValueError(
-                f"fixed_indices contains dimension '{dim}' which does not "
-                f"exist in default_ds. Available dimensions: {sorted(full_index_map)}"
-            )
-        valid = full_index_map[dim]
-        invalid = [i for i in idxs if i not in valid]
-        if invalid:
-            raise ValueError(
-                f"fixed_indices['{dim}'] contains out-of-range indices {invalid}. "
-                f"Valid range for '{dim}' is 0–{len(valid) - 1}."
-            )
 
 
 def _generate_suffix(ensemble_number: int, pad_length: int = 3) -> str:
@@ -452,3 +475,37 @@ def _write_ensemble_list(out_dir: Path, file_prefix: str, ensembles: list[str]):
     with open(out_dir / f"{file_prefix}.txt", "w", encoding="utf-8") as f:
         for ens in ensembles:
             f.write(f"{ens}\n")
+
+
+def _validate_fixed_indices(
+    fixed_indices: dict[str, list[int]],
+    default_ds: xr.Dataset,
+) -> None:
+    for dim, indices in fixed_indices.items():
+        if dim not in default_ds.sizes:
+            raise ValueError(
+                f"fixed_indices dimension '{dim}' not found in default dataset. "
+                f"Available dimensions: {sorted(default_ds.sizes)}"
+            )
+        dim_size = default_ds.sizes[dim]
+        bad = [i for i in indices if i < 0 or i >= dim_size]
+        if bad:
+            raise ValueError(
+                f"fixed_indices['{dim}'] contains out-of-range indices {bad}. "
+                f"Dimension '{dim}' has size {dim_size} (valid: 0–{dim_size - 1})."
+            )
+
+
+def _free_mask(
+    arr: np.ndarray,
+    free_dim: str | None,
+    fixed_indices: dict[str, list[int]],
+) -> np.ndarray | slice:
+    if free_dim is None or arr.ndim == 0:
+        return slice(None)
+    fixed = fixed_indices.get(free_dim, [])
+    if not fixed:
+        return slice(None)
+    mask = np.ones(arr.shape[0], dtype=bool)
+    mask[fixed] = False
+    return mask

@@ -1,8 +1,7 @@
 """
 Scaler - abstract base class for parameter scaling strategies
-A Scaler takes a Parameter, a normalized value in [0, 1], and an optional
-default_value, and returns a concrete parameter value ready to be written
-to a parameter file.
+A Scaler takes a min and max bounds, a normalized value in [0, 1], and returns a 
+concrete parameter value ready to be written to a parameter file.
 
 Concrete implementations
 ------------------------
@@ -12,8 +11,6 @@ DefaultScaler : linearly interpolates between resolved min and max bounds.
 from __future__ import annotations
 from abc import ABC, abstractmethod
 import numpy as np
-
-from .parameter import Parameter
 
 class Scaler(ABC):
     """Abstract base for parameter scaling strategies.
@@ -25,52 +22,50 @@ class Scaler(ABC):
     @abstractmethod
     def scale(
         self,
-        param: Parameter,
-        lh_value: float,
-        default_value: float | np.ndarray | None = None,
+        min_bound: float | np.ndarray,
+        max_bound: float | np.ndarray,
+        normalized_val: float,
+        mask: np.ndarray | None,
     ) -> float | np.ndarray:
         """Convert a normalized [0, 1] value into a concrete parameter value.
 
         Args:
-            param (Parameter): The parameter being scaled. Provides bounds and metadata.
-            lh_value (float): A value in [0, 1] from the sampler (e.g. Latin Hypercube).
-            default_value (float | np.ndarray | None, optional): The default parameter
-            value from the parameter file. Required if either bound is a PercentBound;
-            ignored otherwise. Defaults to None.
+            min_bound (float | np.ndarray): minimum bound
+            max_bound (float | np.ndarray): maximum bound
+            normalized_val (float): A value in [0, 1] from the sampler (e.g. Latin Hypercube).
+            mask (np.ndarray | None) optional mask of fixed indices. 
+            We only validate non-fixed indices
 
         Returns:
-            float | np.ndarray: The scaled parameter value. Returns a float for
-            non-PFT parameters with fixed/percent bounds; returns np.ndarray for
-            PFTBound parameters.
+            float | np.ndarray: The scaled parameter value.
         """
     
     @abstractmethod
     def normalize(
         self,
-        param: Parameter,
+        min_bound: float | np.ndarray,
+        max_bound: float | np.ndarray,
         value: float | np.ndarray,
-        default_value: float | np.ndarray | None = None,
+        mask: np.ndarray | None,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value.
 
         Args:
-            param (Parameter): The parameter being scaled. Provides bounds and metadata.
+            min_bound (float | np.ndarray): minimum bound
+            max_bound (float | np.ndarray): maximum bound
             value (float | np.ndarray): Parameter value
-            default_value (float | np.ndarray | None, optional): The default parameter
-            value from the parameter file. Required if either bound is a PercentBound;
-            ignored otherwise. Defaults to None.
+            mask (np.ndarray | None) optional mask of fixed indices. 
+            We only validate non-fixed indices
 
         Returns:
-            float | np.ndarray: The normalized parameter value. Returns a float for
-            non-PFT parameters with fixed/percent bounds; returns np.ndarray for
-            PFTBound parameters
+            float | np.ndarray: The normalized parameter value.
         """
 
 class DefaultScaler(Scaler):
     """Linearly interpolates between resolved min and max bounds.
 
-    For a given lh_value in [0, 1]:
-        result = min_val + lh_value * (max_val - min_val)
+    For a given normalized_val in [0, 1]:
+        result = min_val + normalized_val * (max_val - min_val)
 
     Works for all three bound types (Fixed, Percent, PFT) — the bounds
     handle their own resolution, this class just does the interpolation.
@@ -78,82 +73,82 @@ class DefaultScaler(Scaler):
 
     def scale(
         self,
-        param: Parameter,
-        lh_value: float,
-        default_value: float | np.ndarray | None = None,
+        min_bound: float | np.ndarray,
+        max_bound: float | np.ndarray,
+        normalized_val: float,
+        mask: np.ndarray | None,
     ) -> float | np.ndarray:
         """Convert a normalized [0, 1] value into a concrete parameter value.
 
         Args:
-            param (Parameter): The parameter being scaled. Provides bounds and metadata.
-            lh_value (float): A value in [0, 1] from the sampler (e.g. Latin Hypercube).
-            default_value (float | np.ndarray | None, optional): The default parameter
-            value from the parameter file. Required if either bound is a PercentBound;
-            ignored otherwise. Defaults to None.
+            min_bound (float | np.ndarray): minimum bound
+            max_bound (float | np.ndarray): maximum bound
+            normalized_val (float): A value in [0, 1] from the sampler (e.g. Latin Hypercube).
+            mask (np.ndarray | None) optional mask of fixed indices. 
+            We only validate non-fixed indices
 
         Returns:
-            float | np.ndarray: The scaled parameter value. Returns a float for
-            non-PFT parameters with fixed/percent bounds; returns np.ndarray for
-            PFTBound parameters
+            float | np.ndarray: The scaled parameter value.
         """
-
-        # get the bounds
-        min_val, max_val = param.bounds.resolve(default_value)
-        if min_val is None or max_val is None:
-            raise ValueError(
-                f"Parameter '{param.spec.name}' has NullBounds — cannot scale. "
-        )
-        self._validate_bounds(param.spec.name, min_val, max_val)
+        # validate the bounds
+        _validate_bounds(min_bound, max_bound, mask=mask)
 
         # scale
-        return min_val + lh_value * (max_val - min_val)
+        return min_bound + normalized_val * (max_bound - min_bound)
     
     def normalize(
         self,
-        param: Parameter,
+        min_bound: float | np.ndarray,
+        max_bound: float | np.ndarray,
         value: float | np.ndarray,
-        default_value: float | np.ndarray | None = None,
+        mask: np.ndarray | None,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value.
 
         Args:
-            param (Parameter): The parameter being scaled. Provides bounds and metadata.
+            min_bound (float | np.ndarray): minimum bound
+            max_bound (float | np.ndarray): maximum bound
             value (float | np.ndarray): Parameter value
-            default_value (float | np.ndarray | None, optional): The default parameter
-            value from the parameter file. Required if either bound is a PercentBound;
-            ignored otherwise. Defaults to None.
+            mask (np.ndarray | None) optional mask of fixed indices. 
+            We only validate non-fixed indices
 
         Returns:
-            float | np.ndarray: The normalized parameter value. Returns a float for
-            non-PFT parameters with fixed/percent bounds; returns np.ndarray for
-            PFTBound parameters
+            float | np.ndarray: The normalized parameter value.
         """
 
-        # get the bounds
-        min_val, max_val = param.bounds.resolve(default_value)
-        self._validate_bounds(param.spec.name, min_val, max_val)
+        # validate the bounds
+        _validate_bounds(min_bound, max_bound, mask=mask)
 
         # normalize
-        return (value - min_val) / (max_val - min_val)
+        return (value - min_bound) / (max_bound - min_bound)
 
-    def _validate_bounds(
-        self,
-        name: str,
-        min_val: float | np.ndarray,
-        max_val: float | np.ndarray,
-    ) -> None:
-        """Raise error if any min >= max after resolution
+def _validate_bounds(
+    min_val: float | np.ndarray,
+    max_val: float | np.ndarray,
+    mask: np.ndarray | None = None,
+) -> None:
+    """Raise error if any min > max after resolution
 
-        Args:
-            name (str): parameter name
-            min_val (float | np.ndarray): minimum value
-            max_val (float | np.ndarray): maximum value
+    Args:
+        min_val (float | np.ndarray): minimum value
+        max_val (float | np.ndarray): maximum value
 
-        Raises:
-            ValueError: Parameter min > max
-        """
-        if np.any(np.asarray(min_val) > np.asarray(max_val)):
-            raise ValueError(
-                f"Parameter '{name}' has min > max after resolving bounds "
-                f"(min={min_val}, max={max_val}). Check the spreadsheet."
-            )
+    Raises:
+        ValueError: Parameter min > max
+    """
+    if min_val is None or max_val is None:
+        raise ValueError(
+            f"Parameter min or max is None  - cannot scale"
+            f"(min={min_val}, max={max_val}). Check inputs"
+    )
+    
+    min_arr = np.asarray(min_val)
+    max_arr = np.asarray(max_val)
+    if mask is not None and min_arr.ndim > 0:
+        min_arr = min_arr[mask]
+        max_arr = max_arr[mask]
+    if np.any(min_arr > max_arr):
+        raise ValueError(
+            f"Parameter has min > max "
+            f"(min={min_val}, max={max_val}). Check inputs"
+        )
