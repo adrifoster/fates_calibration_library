@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from fates_calibration_library.param_gen.bounds import FixedBound, PFTBound, NullBound, PercentBound
-from fates_calibration_library.param_gen.parameter import (
+from fates_calibration_library.param_ens_gen.bounds import FixedBound, PFTBound, NullBound, PercentBound
+from fates_calibration_library.param_ens_gen.parameter import (
     DimIndex,
     DefaultParameter,
     JointParameter,

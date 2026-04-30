@@ -2,14 +2,14 @@
 
 import pytest
 
-from fates_calibration_library.param_gen.param_spec import (
+from fates_calibration_library.param_ens_gen.param_spec import (
     ParamSpec,
     _parse_dims,
     _parse_list,
     _parse_optional_int,
     _parse_optional_str,
 )
-from fates_calibration_library.param_gen.strategy import Strategy
+from fates_calibration_library.param_ens_gen.strategy import Strategy
 
 # ===========================================================================
 # ParamSpec.from_row: successful construction

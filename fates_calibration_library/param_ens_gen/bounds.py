@@ -39,7 +39,6 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .strategy import Strategy
 
 # ---------------------------------------------------------------------------
 # Abstract base
@@ -104,14 +103,6 @@ class Bound(ABC):
 
         as_str = str(cell_value).strip().lower()
 
-        # check strategy to see if this is a posterior marker
-        try:
-            strategy = Strategy.parse(as_str)
-            if strategy.requires_posterior():
-                return NullBound(value=None)
-        except ValueError:
-            pass  # not a strategy string; continue parsing as a bound value
-
         # wrong class method
         if as_str == "pft":
             raise ValueError(
@@ -153,30 +144,6 @@ class Bound(ABC):
 # ---------------------------------------------------------------------------
 # Concrete bound types
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class NullBound(Bound):
-    """Placeholder bound for parameters whose strategy does not use bounds.
-
-    Never resolved at sample time — callers must check
-    strategy.requires_bounds() before calling resolve().
-    """
-
-    value: None
-
-    def resolve(self, default_value: float | np.ndarray | None = None) -> None:
-        """Return the concrete bound value.
-
-        Args:
-            default_value (float | np.ndarray | None, optional): Default value from
-            parameter file. Defaults to None.
-
-        Returns:
-            None: Nothing
-        """
-        return None
-
 
 @dataclass
 class FixedBound(Bound):

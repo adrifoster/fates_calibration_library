@@ -7,16 +7,16 @@ from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
 
-from .strategy import Strategy
 
 @dataclass
 class ParamSpec:
     """All metadata for a single calibratable parameter. Belongs to a Parameter object.
     
     Note: 
-    This is a pure data container which mirrors exactly one row of the input calibration
-    spreadsheet. It has no knowledge of parameter datasets or bound resolution —
-    those concerns belong to Parameter, which owns a ParamSpec instance.
+    This is a pure data container which mirrors exactly one row (and potentially an extra 
+    sheet) of the input calibration spreadsheet. It has no knowledge of parameter 
+    datasets or distribution resolution — those concerns belong to Parameter, 
+    which owns a ParamSpec instance.
 
     Attributes
     ----------
@@ -39,16 +39,6 @@ class ParamSpec:
         ['fates_leafage_class', 'fates_pft'], or [] for scalars.
     param_type : str
         How this parameter gets scaled and written to parameter file
-    strategy : Strategy
-        How the parameter value is generated during sampling:
-        - Strategy.UNIFORM   : scaled between a min and max (bounds on Parameter)
-        - Strategy.POSTERIOR : drawn from an external posterior distribution
-    param_min : str
-        Raw param_min cell from the spreadsheet. Stored as a string and
-        parsed into a Bound object by Parameter. Examples: '0.5',
-        '50percent', 'pft', 'posterior'.
-    param_max : str
-        Raw param_max cell from the spreadsheet. Same format as param_min.
     slice_dim : str | None
         For 'sliced' param_type: which dimension is being indexed into,
         e.g. 'fates_leafage_class' or 'fates_plant_organs'.
@@ -74,9 +64,6 @@ class ParamSpec:
     units: str
     dims: list[str]
     param_type: str
-    strategy: Strategy
-    param_min: str
-    param_max: str
     slice_dim: Optional[str]
     slice_index: Optional[int]
     root_param: Optional[str]
@@ -166,13 +153,6 @@ class ParamSpec:
             ParamSpec: ParamSpec instance
         """
 
-        try:
-            strategy = Strategy.parse(str(row.get("strategy", "")))
-        except ValueError as e:
-            raise ValueError(
-                f"Parameter '{row.get('parameter_name')}': {e}"
-            ) from e
-        
         return cls(
             name=str(row["parameter_name"]),
             category=str(row.get("category", "")),
@@ -181,9 +161,6 @@ class ParamSpec:
             units=str(row.get("units", "")),
             dims=_parse_dims(row.get("coord", "")),
             param_type=str(row.get("param_type", "")).strip(),
-            strategy=strategy,
-            param_min=str(row.get("param_min", "")).strip(),
-            param_max=str(row.get("param_max", "")).strip(),
             slice_dim=_parse_optional_str(row.get("slice_dim")),
             slice_index=_parse_optional_int(row.get("slice_index")),
             base_params=_parse_list(row.get("base_params", "")),
