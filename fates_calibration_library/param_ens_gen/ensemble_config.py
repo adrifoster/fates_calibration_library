@@ -35,6 +35,10 @@ class EnsembleConfig:
         their default values across all ensemble members. For example,
         ``{'fates_pft': [7, 8, 9]}`` fixes PFTs 8, 9, and 10 (0-based).
         If None, all indices are free.
+    posterior_sources : Path | None
+        Path to a YAML file defining posterior distribution sources for
+        parameters with strategy='posterior'. If None, no posterior
+        parameters are expected.
     """
 
     param_data_file: Path
@@ -43,11 +47,14 @@ class EnsembleConfig:
     default_param_file: Path
     param_list: Optional[list[str]] = None
     fixed_indices: Optional[dict[str, list[int]]] = None
+    posterior_sources: Optional[Path] = None
 
     def __post_init__(self):
         self.param_data_file = Path(self.param_data_file)
         self.ensemble_dir = Path(self.ensemble_dir)
         self.default_param_file = Path(self.default_param_file)
+        if self.posterior_sources is not None:
+            self.posterior_sources = Path(self.posterior_sources)
 
 
 @dataclass
@@ -64,19 +71,11 @@ class LatinHypercubeConfig(EnsembleConfig):
         (n_samples, n_params). If supplied, this matrix is used directly
         instead of generating a new one. Useful for reproducibility or
         when the LH matrix was generated externally.
-    posterior_sources : Path | None
-        Path to a YAML file defining posterior distribution sources for
-        parameters with strategy='posterior'. If None, no posterior
-        parameters are expected.
     """
 
     ensemble_members: int = 100
     prebuilt: Optional[np.ndarray] = None
-    posterior_sources: Optional[Path] = None
 
-    def __post_init__(self):
-        if self.posterior_sources is not None:
-            self.posterior_sources = Path(self.posterior_sources)
 
 
 @dataclass

@@ -11,10 +11,7 @@ import numpy as np
 import xarray as xr
 
 from .param_spec import ParamSpec
-from .bounds import ParamBounds
-from .scaler import Scaler
-from .posterior import PosteriorConfig
-
+from .sampler import Sampler
 
 @dataclass
 class DimIndex:
@@ -57,21 +54,26 @@ class Parameter(ABC):
     def __init__(
             self,
             row: pd.Series,
+            default_ds: xr.Dataset,
             pft_sheet: pd.DataFrame | None = None,
-            default_ds: xr.Dataset | None = None
+            posterior_config: dict | None = None,
             ):
         self.spec = ParamSpec.from_row(row)
-        self.bounds = ParamBounds.from_row_and_sheet(row, pft_sheet)
+        self.sampler = Sampler.from_row_and_sheet(row, pft_sheet, posterior_config)
         self.active_index: Optional[DimIndex] = None
-        if default_ds is not None:
-            self.validate(default_ds)
+        self.validate(default_ds)
+            
+        self.free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
+        self.n_indices = default_ds.sizes.get(self.free_dim, 1) if self.free_dim else 1
 
     @classmethod
     def from_row(
         cls,
         row: pd.Series,
+        default_ds: xr.Dataset,
         pft_sheet: pd.DataFrame | None = None,
-        default_ds: xr.Dataset | None = None,
+        posterior_config: dict | None = None,
+
     ) -> Parameter:
         """Construct the correct Parameter subclass from a spreadsheet row."""
         param_type = str(row.get("param_type", "")).strip()
@@ -81,7 +83,7 @@ class Parameter(ABC):
                 f"Unknown param_type '{param_type}'. "
                 f"Valid types: {sorted(cls._registry)}"
             )
-        return subclass(row, pft_sheet, default_ds)
+        return subclass(row, default_ds, pft_sheet, posterior_config)
     
     def validate(self, default_ds: xr.Dataset) -> None:
         variables_to_check = self._variables_to_validate()
@@ -100,55 +102,7 @@ class Parameter(ABC):
                     f"{actual_dims} in default dataset but spec.dims is "
                     f"{self.spec.dims}. Dimensions must match exactly."
                 )
-    
-    def scale(self, normalized_value: float, default_ds: xr.Dataset, scaler: Scaler,
-              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
-        """Scale a parameter between its minimum and maximum bounds given and input
-        [0-1] value.
-
-        Args:
-            normalized_value (float): normalized value [0-1] used to scale between 
-                parameter minimum and maximum bounds
-            default_ds (xr.Dataset): default parameter dataset. used for validating
-                dimensions and indices
-            scaler (Scaler): Scaler object to do actual scaling math
-            fixed_indices (dict[str, list[int]]): Mapping of dimension 
-                name to 0-based indices to hold at default.
-
-        Returns:
-            float | np.ndarray: scaled parameter value
-        """
-        
-        default_val = self.get_default(default_ds)
-        free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
-        min_val, max_val = self.bounds.resolve(default_val)
-        
-        # apply mask - we only validate bounds on non-fixed indices
-        mask = _free_mask(default_val, free_dim, fixed_indices)
-        return scaler.scale(min_val, max_val, normalized_value, mask=mask)
-    
-    def posterior_draw(self, normalized_value: float, default_ds: xr.Dataset,
-                       posterior: PosteriorConfig) -> float | np.ndarray:
-        """Draw a parameter value from an input distribution given a 
-            normalized_value [0-1], used as a quantile index
-
-        Args:
-            normalized_value (float): normalized value [0-1] used as a quantile index
-            default_ds (xr.Dataset): default parameter dataset. used for validating
-                dimensions and indices
-            scaler (Scaler): Scaler object to do actual scaling math
-
-        Returns:
-            float | np.ndarray: scaled parameter value
-        """
-        
-        free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
-        array_index = (
-            self.active_index.index if self.active_index is not None else None
-        )
-        n_indices = default_ds.sizes.get(free_dim, 1)
-        return posterior.draw(normalized_value, array_index, n_indices)
-        
+                
     def _variables_to_validate(self) -> list[str]:
         """Returns parameter names this parameter touches.
         
@@ -195,6 +149,23 @@ class Parameter(ABC):
                 0-based indices to hold at default. None means no indices are fixed
         """
 
+    @abstractmethod
+    def sample(
+        self,
+        normalized_value: float,
+        fixed_indices: dict[str, list[int]], 
+    ) -> float | np.ndarray:
+        """Sample a parameter given an input normalized value
+
+        Args:
+            normalized_value (float): normalized value [0-1] used to sample
+            default_ds (xr.Dataset): default parameter dataset. used for validating
+                dimensions and indices
+            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
+
+        Returns:
+            float
+        """
 
 # ----------------------------------------------------------------------------------------
 # Concrete Parameter classes
@@ -237,11 +208,30 @@ class DefaultParameter(Parameter, param_type="default"):
         if self.active_index is not None:
             arr[self.active_index.index] = _as_scalar(value, self.spec.name)
         else:
-            free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
-            fixed = (fixed_indices or {}).get(free_dim, []) if free_dim else []
+            fixed = (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
             arr = _broadcast_to_array(arr, value, fixed, self.spec.name)
 
         ds[self.spec.name].values = arr
+        
+    def sample(self, normalized_value: float, default_ds: xr.Dataset,
+              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
+        """Sample a parameter given an input normalized value
+
+        Args:
+            normalized_value (float): normalized value [0-1] used to sample
+            default_ds (xr.Dataset): default parameter dataset. used for validating
+                dimensions and indices
+            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
+
+        Returns:
+            float | np.ndarray: sampled parameter value
+        """
+        
+        default_value = self.get_default(default_ds)
+        mask = _free_mask(default_value, self.free_dim, fixed_indices)
+        array_index = self.active_index.index if self.active_index is not None else None
+        return self.sampler.sample(normalized_value, mask, default_value,
+                                   array_index, self.n_indices)
 
 
 class SlicedParameter(Parameter, param_type="sliced"):
@@ -291,8 +281,7 @@ class SlicedParameter(Parameter, param_type="sliced"):
             idx[da_dims.index(self.active_index.dim)] = self.active_index.index
             arr[tuple(idx)] = _as_scalar(value, self.spec.base_params[0])
         else:
-            free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
-            fixed = (fixed_indices or {}).get(free_dim, []) if free_dim else []
+            fixed = (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
             slice_arr = arr[tuple(idx)].copy()
             slice_arr = _broadcast_to_array(
                 slice_arr, value, fixed, self.spec.base_params[0]
@@ -300,6 +289,26 @@ class SlicedParameter(Parameter, param_type="sliced"):
             arr[tuple(idx)] = slice_arr
 
         ds[self.spec.base_params[0]].values = arr
+        
+    def sample(self, normalized_value: float, default_ds: xr.Dataset,
+              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
+        """Sample a parameter given an input normalized value
+
+        Args:
+            normalized_value (float): normalized value [0-1] used to sample
+            default_ds (xr.Dataset): default parameter dataset. used for validating
+                dimensions and indices
+            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
+
+        Returns:
+            float | np.ndarray: sampled parameter value
+        """
+        
+        default_value = self.get_default(default_ds)
+        mask = _free_mask(default_value, self.free_dim, fixed_indices)
+        array_index = self.active_index.index if self.active_index is not None else None
+        return self.sampler.sample(normalized_value, mask, default_value,
+                                   array_index, self.n_indices)
 
 
 class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
@@ -349,8 +358,7 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
             i = self.active_index.index
             arr[i] = root_arr[i] + delta
         else:
-            free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
-            fixed = (fixed_indices or {}).get(free_dim, []) if free_dim else []
+            fixed = (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
 
             if arr.ndim == 0 or not self.spec.free_dims:
                 arr = root_arr + delta
@@ -364,6 +372,25 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
 
         ds[self.spec.base_params[0]].values = arr
 
+    def sample(self, normalized_value: float, default_ds: xr.Dataset,
+              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
+        """Sample a parameter given an input normalized value
+
+        Args:
+            normalized_value (float): normalized value [0-1] used to sample
+            default_ds (xr.Dataset): default parameter dataset. used for validating
+                dimensions and indices
+            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
+
+        Returns:
+            float | np.ndarray: sampled parameter value
+        """
+        
+        default_value = self.get_default(default_ds)
+        mask = _free_mask(default_value, self.free_dim, fixed_indices)
+        array_index = self.active_index.index if self.active_index is not None else None
+        return self.sampler.sample(normalized_value, mask, default_value,
+                                   array_index, self.n_indices)
 
 class JointParameter(Parameter, param_type="joint"):
     """Parameter which stands for multiple connected parameters (e.g. posterior draws)."""
@@ -406,12 +433,30 @@ class JointParameter(Parameter, param_type="joint"):
             if self.active_index is not None:
                 arr[self.active_index.index] = _as_scalar(val, parameter)
             else:
-                free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
-                fixed = (fixed_indices or {}).get(free_dim, []) if free_dim else []
+                fixed = (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
                 arr = _broadcast_to_array(arr, val, fixed, parameter)
             
             ds[parameter].values = arr
 
+    def sample(self, normalized_value: float, default_ds: xr.Dataset,
+              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
+        """Sample a parameter given an input normalized value
+
+        Args:
+            normalized_value (float): normalized value [0-1] used to sample
+            default_ds (xr.Dataset): default parameter dataset. used for validating
+                dimensions and indices
+            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
+
+        Returns:
+            float | np.ndarray: sampled parameter value
+        """
+        
+        default_value = self.get_default(default_ds)
+        mask = None
+        array_index = self.active_index.index if self.active_index is not None else None
+        return self.sampler.sample(normalized_value, mask, default_value,
+                                   array_index, self.n_indices)
 
 def _broadcast_to_array(
     arr: np.ndarray,
@@ -479,7 +524,6 @@ def _as_scalar(value: float | np.ndarray, name: str) -> float:
             f"array of shape {arr.shape}. Pass a scalar or expand the spec."
         )
     return float(arr)
-
 
 def _free_mask(
     arr: np.ndarray,
