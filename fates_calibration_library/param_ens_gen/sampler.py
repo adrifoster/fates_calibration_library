@@ -33,8 +33,10 @@ class Sampler(ABC):
     def sample(
         self,
         normalized_value: float,
-        default_value: float | np.ndarray | None = None,
         mask: np.ndarray | None = None,
+        default_value: float | np.ndarray | None = None,
+        array_index: int | None = None,
+        n_indices: int | None = None,
     ):
         """Generate a sample for a parameter"""
 
@@ -42,8 +44,10 @@ class Sampler(ABC):
     def normalize(
         self,
         value: float | np.ndarray,
-        default_value: float | np.ndarray | None = None,
         mask: np.ndarray | None = None,
+        default_value: float | np.ndarray | None = None,
+        array_index: int | None = None,
+        n_indices: int | None = None,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value."""
 
@@ -59,12 +63,11 @@ class Sampler(ABC):
         Args:
             row (pd.Series): A row from the main sheet.
             pft_sheet (pd.DataFrame | None, optional): The per-parameter PFT sheet,
-            required when a relevant column is 'pft'. Ignored otherwise.
-            Defaults to None.
+                required when a relevant column is 'pft'. Ignored otherwise.
+                Defaults to None.
 
         Raises:
-            ValueError: No pft_sheet supplied if param_min/param_max is pft
-            ValueError: Mixing of pft and some other bounds type
+            Unknown strategy
 
         Returns:
             Sampler: Sampler
@@ -73,7 +76,7 @@ class Sampler(ABC):
         subclass = cls._registry.get(param_strategy)
         if subclass is None:
             raise ValueError(
-                f"Unknown param_type '{param_strategy}'. "
+                f"Unknown strategy '{param_strategy}'. "
                 f"Valid types: {sorted(cls._registry)}"
             )
         return subclass(row, pft_sheet, posterior_config)

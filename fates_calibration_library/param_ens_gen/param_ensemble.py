@@ -5,6 +5,7 @@ ParamEnsemble class - responsible for generating the entire ensemble
 from __future__ import annotations
 from dataclasses import dataclass, fields
 from pathlib import Path
+import yaml
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
@@ -12,8 +13,6 @@ from scipy.stats import qmc
 import xarray as xr
 
 from .parameter import Parameter
-from .strategy import Strategy
-from .sampler import PosteriorSampler
 from .ensemble_config import EnsembleConfig, LatinHypercubeConfig, OneAtATimeConfig
 from .sort_params import sort_params
 
@@ -99,6 +98,10 @@ class ParamEnsemble(ABC):
         # set attributes
         self.file_prefix = config.file_prefix
         self.default_ds = xr.open_dataset(config.default_param_file)
+        
+        if config.posterior_sources:
+            with open(config.posterior_sources, "r", encoding="utf-8") as f:
+                posterior_config = yaml.safe_load(f)
 
         # create sorted list of parameter objects
         # this automatically checks and sorts order to make sure anything
@@ -110,6 +113,7 @@ class ParamEnsemble(ABC):
                     row,
                     pft_sheet=pft_sheets.get(row["parameter_name"]),
                     default_ds=self.default_ds,
+                    posterior_config=posterior_config.get(row["parameter_name"]),
                 )
                 for _, row in main.iterrows()
             ]
@@ -119,10 +123,6 @@ class ParamEnsemble(ABC):
         self.fixed_indices: dict[str, list[int]] = config.fixed_indices or {}
         if self.fixed_indices:
             _validate_fixed_indices(self.fixed_indices, self.default_ds)
-            
-        self.posterior_configs: dict[str, PosteriorConfig] = {}
-        if config.posterior_sources:
-            self.attach_posteriors(config.posterior_sources)
 
 
     @classmethod
@@ -249,47 +249,6 @@ class ParamEnsemble(ABC):
         Returns:
             pd.DataFrame: output data frame that serves as ensemble key
         """
-        
-    def attach_posteriors(self, yaml_path: Path) -> None:
-        """Load posterior configs from YAML
-
-        Args:
-            yaml_path (Path): Path to posterior_sources.yaml.
-
-        Raises:
-            ValueError: If a config entry has no matching Parameter
-        """
-        configs = PosteriorConfig.from_yaml(yaml_path)
-        posterior_params = [
-            param for param in self.params if isinstance(param.sampler, PosteriorSampler)
-        ]
-        for param in posterior_params:
-            if param.spec.name not in configs:
-                raise ValueError(
-                    f"parameter '{param.spec.name}' has strategy='posterior' but no "
-                    "entry in posterior_sources.yaml."
-                )
-            param.sampler.attach_config(configs[param.spec.name])
-        
-    def prepare_posteriors(self):
-        """Validate that every posterior parameter has a PosteriorConfig attached and 
-        then prepare the datasets
-
-        Raises:
-            RuntimeError: No posterior sources yet. Need to attach_configs
-            RuntimeError: parameter not in sources
-        """
-        posterior_params = [
-            param for param in self.params if isinstance(param.sampler, PosteriorSampler)
-        ]
-        for param in posterior_params:
-            if param.sampler.config is None:
-                raise RuntimeError(
-                    f"parameter '{param.spec.name}': no posterior config attached. "
-                    "Call attach_posteriors() first."
-                )
-        for _, config in self.posterior_configs.items():
-            config.prepare()
 
 class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
     """Concrete class for the Latin Hypercube ensemble class
@@ -349,9 +308,6 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
             each containing one ParameterSample per parameter.
         """
         
-        # validate and prepare posterior distributions
-        self.prepare_posteriors()
-        
         # build latin hypercube
         latin_hypercube = self.build_lh(len(self.params), self.prebuilt)
 
@@ -387,21 +343,7 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
             param = param_sample.parameter
             normalized_value = param_sample.normalized_value
             
-            if param.spec.strategy is Strategy.UNIFORM:
-                
-                value = param.scale(normalized_value, self.default_ds, self.scaler,
-                            self.fixed_indices)
-            
-            elif param.spec.strategy is Strategy.POSTERIOR:
-            
-                value = param.posterior_draw(normalized_value, self.default_ds,
-                       self.posterior_configs[param.spec.name])
-            
-            else:
-                raise ValueError(
-                    f"Not sure how to use parameter strategy {param.spec.strategy}."
-                    "Add logic here."
-                )
+            value = param.sample(normalized_value, self.default_ds, self.fixed_indices)
             
             param.set_value(
                 ds, self.default_ds, value, fixed_indices=self.fixed_indices

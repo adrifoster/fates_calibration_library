@@ -37,9 +37,8 @@ class Parameter(ABC):
     ----------
     spec : ParamSpec
         All metadata for this parameter
-    bounds : ParamBounds
-        Unresolved min/max bounds. Call bounds.resolve(default_value) at
-        sample time to get concrete values.
+    sampler : Sampler
+        Class for parameter sampling
     active_index: DimIndex | None
         Set by the expansion step on expanded Parameters. Records which dimension
         and index this Parameter is responsible for. None on unexpanded Parameters.
@@ -150,11 +149,8 @@ class Parameter(ABC):
         """
 
     @abstractmethod
-    def sample(
-        self,
-        normalized_value: float,
-        fixed_indices: dict[str, list[int]], 
-    ) -> float | np.ndarray:
+    def sample(self, normalized_value: float, default_ds: xr.Dataset,
+              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
         """Sample a parameter given an input normalized value
 
         Args:
