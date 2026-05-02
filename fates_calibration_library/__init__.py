@@ -1,3 +1,3 @@
 """Init"""
 
-from .param_gen.param_ensemble import ParamEnsemble, LatinHypercubeEnsemble, OneAtATimeParameterEnsemble
+from .param_ens_gen.param_ensemble import ParamEnsemble

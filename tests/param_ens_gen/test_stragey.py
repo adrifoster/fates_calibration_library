@@ -2,7 +2,7 @@
  
 import pytest
  
-from fates_calibration_library.param_gen.strategy import Strategy
+from fates_calibration_library.param_ens_gen.strategy import Strategy
  
  
 # ===========================================================================

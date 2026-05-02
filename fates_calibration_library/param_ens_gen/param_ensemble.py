@@ -5,16 +5,14 @@ ParamEnsemble class - responsible for generating the entire ensemble
 from __future__ import annotations
 from dataclasses import dataclass, fields
 from pathlib import Path
+import yaml
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
 from scipy.stats import qmc
 import xarray as xr
 
-from .posterior import PosteriorConfig
 from .parameter import Parameter
-from .scaler import UniformScaler
-from .strategy import Strategy
 from .ensemble_config import EnsembleConfig, LatinHypercubeConfig, OneAtATimeConfig
 from .sort_params import sort_params
 
@@ -74,8 +72,6 @@ class ParamEnsemble(ABC):
         their default values across all ensemble members. For example,
         ``{'fates_pft': [7, 8, 9]}`` fixes PFTs 8, 9, and 10 (0-based).
         If None, all indices are free.
-    scaler: DefaultScaler
-        used for scaling parameters between a min and max bound
     """
 
     _registry: dict[str, type[ParamEnsemble]] = {}
@@ -102,6 +98,10 @@ class ParamEnsemble(ABC):
         # set attributes
         self.file_prefix = config.file_prefix
         self.default_ds = xr.open_dataset(config.default_param_file)
+        
+        if config.posterior_sources:
+            with open(config.posterior_sources, "r", encoding="utf-8") as f:
+                posterior_config = yaml.safe_load(f)
 
         # create sorted list of parameter objects
         # this automatically checks and sorts order to make sure anything
@@ -113,6 +113,7 @@ class ParamEnsemble(ABC):
                     row,
                     pft_sheet=pft_sheets.get(row["parameter_name"]),
                     default_ds=self.default_ds,
+                    posterior_config=posterior_config.get(row["parameter_name"]),
                 )
                 for _, row in main.iterrows()
             ]
@@ -123,8 +124,6 @@ class ParamEnsemble(ABC):
         if self.fixed_indices:
             _validate_fixed_indices(self.fixed_indices, self.default_ds)
 
-        # attach scaler
-        self.scaler = UniformScaler()
 
     @classmethod
     def from_dict(
@@ -276,10 +275,6 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
         super().__init__(config)
         self.n_samples = config.ensemble_members
         self.prebuilt = config.prebuilt
-        self.posterior_configs: dict[str, PosteriorConfig] = {}
-
-        if config.posterior_sources:
-            self.attach_posteriors(config.posterior_sources)
 
     @classmethod
     def from_config(cls, config: dict) -> LatinHypercubeEnsemble:
@@ -312,9 +307,6 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
             list[EnsembleMemberSample]: One EnsembleMemberSample per ensemble member, 
             each containing one ParameterSample per parameter.
         """
-        
-        # validate and prepare posterior distributions
-        self.prepare_posteriors()
         
         # build latin hypercube
         latin_hypercube = self.build_lh(len(self.params), self.prebuilt)
@@ -351,21 +343,7 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
             param = param_sample.parameter
             normalized_value = param_sample.normalized_value
             
-            if param.spec.strategy is Strategy.UNIFORM:
-                
-                value = param.scale(normalized_value, self.default_ds, self.scaler,
-                            self.fixed_indices)
-            
-            elif param.spec.strategy is Strategy.POSTERIOR:
-            
-                value = param.posterior_draw(normalized_value, self.default_ds,
-                       self.posterior_configs[param.spec.name])
-            
-            else:
-                raise ValueError(
-                    f"Not sure how to use parameter strategy {param.spec.strategy}."
-                    "Add logic here."
-                )
+            value = param.sample(normalized_value, self.default_ds, self.fixed_indices)
             
             param.set_value(
                 ds, self.default_ds, value, fixed_indices=self.fixed_indices
@@ -431,54 +409,7 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
 
         # otherwise generate one
         return qmc.LatinHypercube(d=n_lh_dims).random(n=self.n_samples)
-
-    def attach_posteriors(self, yaml_path: Path) -> None:
-        """Load posterior configs from YAML
-
-        Args:
-            yaml_path (Path): Path to posterior_sources.yaml.
-
-        Raises:
-            ValueError: If a config entry has no matching Parameter
-        """
-        configs = PosteriorConfig.from_yaml(yaml_path)
-        posterior_params = [
-            param for param in self.params if param.spec.strategy is Strategy.POSTERIOR
-        ]
-        for param in posterior_params:
-            if param.spec.name not in configs:
-                raise ValueError(
-                    f"parameter '{param.spec.name}' has strategy='posterior' but no "
-                    "entry in posterior_sources.yaml."
-                )
-        self.posterior_configs = configs
     
-    def prepare_posteriors(self):
-        """Validate that every posterior parameter has a PosteriorConfig attached and 
-        then prepare the datasets
-
-        Raises:
-            RuntimeError: No posterior sources yet. Need to attach_configs
-            RuntimeError: parameter not in sources
-        """
-        posterior_params = [
-            param for param in self.params if param.spec.strategy is Strategy.POSTERIOR
-        ]
-        if len(posterior_params) > 0:
-            if not self.posterior_configs:
-                raise RuntimeError(
-                    "Parameter ensemble does not have any posterior sources yet."
-                    "run ParamEnsemble.attach_configs('yaml_path')"
-                )
-            for param in posterior_params:
-                if param.spec.name not in self.posterior_configs:
-                    raise RuntimeError(
-                        f"parameter '{param.spec.name}' has strategy='posterior' but is not in"
-                        "posterior_configs - check input yaml and re-run attach_configs"
-                    )
-            for _, config in self.posterior_configs.items():
-                config.prepare(self.n_samples)
-
         
 class OneAtATimeParameterEnsemble(ParamEnsemble, ensemble_type="OAT"):
     """Concrete class for the One-at-a-time (OAT) ensemble class
@@ -489,24 +420,6 @@ class OneAtATimeParameterEnsemble(ParamEnsemble, ensemble_type="OAT"):
         config: OneAtATimeConfig,
     ):
         super().__init__(config)
-        self._check_no_posterior_params()
-        
-    def _check_no_posterior_params(self):
-        """Raise if any parameter uses the posterior strategy.
-
-        Raises:
-            ValueError: If any parameter has strategy=POSTERIOR.
-        """
-        posterior_params = [
-            param.spec.name for param in self.params
-            if param.spec.strategy is Strategy.POSTERIOR
-        ]
-        if posterior_params:
-            raise ValueError(
-                "OneAtATimeEnsemble does not support posterior parameters. "
-                f"Found posterior parameters: {posterior_params}. "
-                "Remove them from the parameter list or use a different ensemble type." 
-            )
         
     @classmethod
     def from_config(cls, config: dict) -> OneAtATimeParameterEnsemble:

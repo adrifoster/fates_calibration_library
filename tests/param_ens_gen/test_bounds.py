@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
  
-from fates_calibration_library.param_gen.bounds import (
+from fates_calibration_library.param_ens_gen.bounds import (
     Bound,
     FixedBound,
     NullBound,
