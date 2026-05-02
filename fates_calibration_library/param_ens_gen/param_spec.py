@@ -5,18 +5,18 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from typing import Optional
+
 import pandas as pd
 
-
+_REQUIRED_COLUMNS: frozenset[str] = frozenset({"parameter_name", "coord", "param_type"})
 @dataclass
 class ParamSpec:
     """All metadata for a single calibratable parameter. Belongs to a Parameter object.
     
     Note: 
-    This is a pure data container which mirrors exactly one row (and potentially an extra 
-    sheet) of the input calibration spreadsheet. It has no knowledge of parameter 
-    datasets or distribution resolution — those concerns belong to Parameter, 
-    which owns a ParamSpec instance.
+    This is a pure data container which mirrors exactly one row of the input calibration 
+    spreadsheet. It has no knowledge of parameter datasets or distribution 
+    resolution — those concerns belong to Parameter, which owns a ParamSpec instance.
 
     Attributes
     ----------
@@ -51,7 +51,7 @@ class ParamSpec:
         - 'default'                 : empty
         - 'sliced'                  : single entry - the original parameter name
         - 'scale_from_root'         : single entry — the original parameter name
-        - 'multi_param'             : all parameters this handle writes to
+        - 'joint'                   : all parameters this handle writes to
     root_param: str | None
         For 'scale_from_root' param_type: the parameter to scale from
         None for all other types.
@@ -70,64 +70,32 @@ class ParamSpec:
     base_params: list[str]
 
     def __post_init__(self):
-        """Catch errors in parameter set up that would cause failures
+        """Validate field-level invariants that hold regardless of param_type.
+ 
+        These are constraints on the fields themselves — a slice field being set
+        on a non-sliced type is always wrong, regardless of what the type-specific
+        logic does. Type-specific required-field validation (e.g. 'sliced needs
+        slice_dim') belongs on the Parameter subclass that owns that logic.
         Raises:
-            ValueError: sliced type with no slice_index, slice_dim, or root_params
-            ValueError: slice_dim, slice_index, and root_params set but not sliced_type
-            ValueError: scale_from_root/joint with no root_params
+            ValueError: If slice_dim or slice_index are set on a non-sliced param.
+            ValueError: If root_param is set on a non-scale_from_root param.
         """
-        # slice_dim, slice_index, and base_params must always be set together
-        if self.param_type == "sliced":
-            slice_parts = [
-                self.slice_dim is not None,
-                self.slice_index is not None,
-                bool(self.base_params),
-            ]
-            if not (all(slice_parts) or not any(slice_parts)):
+        if self.param_type != "sliced":
+            if self.slice_dim is not None:
                 raise ValueError(
-                    f"Parameter '{self.name}': slice_dim, slice_index, and base_params "
-                    "must all be set or all be None/empty."
+                    f"Parameter '{self.name}' has slice_dim set but param_type "
+                    f"is '{self.param_type}', not 'sliced'."
                 )
-        if self.param_type == "sliced" and self.slice_dim is None:
-            raise ValueError(
-                f"Parameter '{self.name}' has param_type 'sliced' "
-                "slice_dim, slice_index, and base_params are not set."
-            )
-        if self.param_type != "sliced" and self.slice_dim is not None:
-            raise ValueError(
-                f"Parameter '{self.name}' has slice_dim set but param_type "
-                f"is '{self.param_type}', not 'sliced'."
-            )
-
-        if self.param_type == "scale_from_root":
-            root_parts = [
-                self.root_param is not None,
-                bool(self.base_params),
-            ]
-            if not (all(root_parts) or not any(root_parts)):
+            if self.slice_index is not None:
                 raise ValueError(
-                    f"Parameter '{self.name}': root_param and base_params "
-                    "must all be set or all be None/empty."
+                    f"Parameter '{self.name}' has slice_index set but param_type "
+                    f"is '{self.param_type}', not 'sliced'."
                 )
-
-        if self.param_type == "scale_from_root" and self.root_param is None:
-            raise ValueError(
-                f"Parameter '{self.name}' has param_type 'scale_from_root' "
-                "root_param and base_params are not set."
-            )
-
         if self.param_type != "scale_from_root" and self.root_param is not None:
             raise ValueError(
                 f"Parameter '{self.name}' has root_param set but param_type "
                 f"is '{self.param_type}', not 'scale_from_root'."
             )
-
-        if self.param_type == "joint" and not self.base_params:
-            raise ValueError(
-                f"Parameter '{self.name}' has param_type 'joint' "
-                "base_params are not set."
-            )
-
     @property
     def free_dims(self) -> list[str]:
         """Dimensions that are not pinned by a slice.
@@ -153,6 +121,17 @@ class ParamSpec:
             ParamSpec: ParamSpec instance
         """
 
+        missing = _REQUIRED_COLUMNS - set(row.index)
+        if missing:
+            raise KeyError(
+                f"Row is missing required columns: {sorted(missing)}"
+            )
+        blank = [col for col in _REQUIRED_COLUMNS if not str(row[col]).strip()]
+        if blank:
+            raise ValueError(
+                f"Row has blank values in required columns: {sorted(blank)}"
+            )
+        
         return cls(
             name=str(row["parameter_name"]),
             category=str(row.get("category", "")),
@@ -160,7 +139,7 @@ class ParamSpec:
             long_name=str(row.get("long_name", "")),
             units=str(row.get("units", "")),
             dims=_parse_dims(row.get("coord", "")),
-            param_type=str(row.get("param_type", "")).strip(),
+            param_type=str(row["param_type"]).strip(),
             slice_dim=_parse_optional_str(row.get("slice_dim")),
             slice_index=_parse_optional_int(row.get("slice_index")),
             base_params=_parse_list(row.get("base_params", "")),
@@ -171,21 +150,39 @@ class ParamSpec:
 # Private parsing helpers
 # ---------------------------------------------------------------------------
 
+def _is_nan(value: float) -> bool:
+    """Return True if *value* is a float NaN."""
+    try:
+        return value != value  # NaN is the only float not equal to itself
+    except TypeError:
+        return False
+
 def _parse_dims(value: str | None) -> list[str]:
     """Parse a coord cell like \"['fates_pft']\" into a list of strings.
+    
+    An explicit empty-list string (``"[]"``) is the correct way to signal
+    a scalar parameter. A missing / NaN value raises ``ValueError`` so that
+    accidental blank cells in the spreadsheet are caught early rather than
+    silently treated as scalars.
 
     Args:
-        value (str | None): input coord
+        value (str | None): Raw coord cell value from the spreadsheet.
 
     Returns:
-        list[str]: list of coordinate strings
+        list[str]: List of dimension-name strings, empty for scalars.
     """
+    if value is None or (isinstance(value, float) and _is_nan(value)):
+        raise ValueError(
+            "coord cell is missing (NaN/None). "
+            "Use an explicit empty list '[]' for scalar parameters."
+        )
     if not isinstance(value, str) or not value.strip():
         return []
     try:
         result = ast.literal_eval(value.strip())
         if isinstance(result, list):
             return [str(d) for d in result]
+        # bare non-list literal (e.g. a bare string without brackets)
         return [str(result)]
     except (ValueError, SyntaxError):
         return [value.strip().strip("[]'\"")]
@@ -198,12 +195,12 @@ def _parse_list(value: str | float | None) -> list[str]:
     or a single name. Returns an empty list for blank/null values.
 
     Args:
-        value (str | float | None): input cell string
+        value (str | float | None): Raw cell value from the spreadsheet.
 
     Returns:
-        list[str]: list of strings
+        list[str]: List of stripped strings, empty list for blank/null input.
     """
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if value is None or (isinstance(value, float) and _is_nan(value)):
         return []
     if not isinstance(value, str) or not value.strip():
         return []
@@ -212,6 +209,7 @@ def _parse_list(value: str | float | None) -> list[str]:
         result = ast.literal_eval(stripped)
         if isinstance(result, list):
             return [str(r).strip() for r in result]
+        # bare non-list literal (e.g. a single quoted string or integer)
         return [str(result).strip()]
     except (ValueError, SyntaxError):
         # plain comma-separated fallback
@@ -222,12 +220,12 @@ def _parse_optional_int(value: str | None) -> Optional[int]:
     """Return int if value is a valid integer, else None.
 
     Args:
-        value (str | None): intput cell
+        value (str | None): Raw cell value from the spreadsheet.
 
     Returns:
-        Optional[int]: output integer or None
+        Optional[int]: Parsed integer, or ``None`` for blank/null/non-numeric input.
     """
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if value is None or (isinstance(value, float) and _is_nan(value)):
         return None
     try:
         return int(value)
@@ -239,12 +237,12 @@ def _parse_optional_str(value: str | None) -> Optional[str]:
     """Return stripped string if non-empty, else None.
 
     Args:
-        value (str | None): input cell
+        value (str | None): Raw cell value from the spreadsheet.
 
     Returns:
-        Optional[str]: stripped string or None
+        Optional[str]: Stripped string, or ``None`` for blank/null/whitespace-only input.
     """
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if value is None or (isinstance(value, float) and _is_nan(value)):
         return None
     s = str(value).strip()
     return s if s else None
