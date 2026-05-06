@@ -1,5 +1,5 @@
 """
-PosteriorSource: data classes for managing posterior distributions
+PosteriorSource: data class for managing posterior distributions
     for parameter sampling.
 
 PosteriorSource owns one file covering one or more array indices.
@@ -8,19 +8,18 @@ Notes
 -----
 - Column names in each text must match the parameter names in `parameters`.
 - `array_indices` can be a list of 0-based integers or the string "all".
-- Paths are resolved relative to the YAML file's directory unless absolute.
 
 Lazy loading
 -------------
-text files are not read until draw() is first called.
+text files are not read until draw_row() is first called.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
-import numpy as np
+from typing import Optional
+
 import pandas as pd
 
 
@@ -29,67 +28,84 @@ _DEFAULT_SORT_INDEX = 0
 
 @dataclass
 class PosteriorSource:
-    """Posterior samples from one text file, covering one or more indices.
+    """Posterior samples from one text file, covering one or more array indices.
 
      Attributes
     ----------
     path : Path
         Path to the text file. Columns must match parameter file parameter names.
-    array_indices : list[int] | "all"
-        array indices (0-based) this file covers. "all" means apply to
+    array_indices : list[int] | str
+        Array indices (0-based) this file covers. "all" means apply to
         every index (broadcast mode).
     parameters : list[str]
         parameter names. Must match column names in the text file.
-    _draws : pd.DataFrame | None
-        Cached sample rows. None until prepare() is called.
+    sort_param_index: int
+        0-based indiex into ``parameters`` selecting the column used to sort
     """
 
     path: Path
-    array_indices: Union[list[int], str]  # list of ints or "all"
+    array_indices: list[int] | str
     parameters: list[str]
-    sort_index: int = _DEFAULT_SORT_INDEX
-    _draws: Optional[pd.DataFrame] = field(default=None, repr=False)
-    _n_rows: Optional[int] = field(default=None, repr=False)
+    sort_param_index: int = _DEFAULT_SORT_INDEX
+
+    # Lazy-loaded state — not part of the public interface or constructor
+    _draws: Optional[pd.DataFrame] = field(default=None, repr=False, init=False)
 
     def __post_init__(self):
         self.path = Path(self.path)
-        if not self.path.exists():
-            raise IOError(f"Cannot find input file {self.path}.")
-        if not isinstance(self.array_indices, str):
-            self.array_indices = list(self.array_indices)
-        else:
+
+        if isinstance(self.array_indices, str):
             if self.array_indices != "all":
                 raise ValueError(
-                    f"array_indices must be 'all' or a list of ints, not {self.array_indices}"
+                    f"array_indices must be a list of ints or 'all', "
+                    f"got '{self.array_indices}'."
                 )
+        else:
+            if not isinstance(self.array_indices, list):
+                raise ValueError(
+                    f"array_indices must be a list of ints or 'all', "
+                    f"got {type(self.array_indices).__name__}."
+                )
+            try:
+                self.array_indices = [int(v) for v in self.array_indices]
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"array_indices must be a list of ints, "
+                    f"but found values that could not be converted: {e}."
+                ) from e
 
     @property
     def is_broadcast(self) -> bool:
         """True if this source applies to all array indices"""
         return self.array_indices == "all"
 
-    def prepare(self):
-        """Pre-draw n_samples rows from the file.
+    def _load(self):
+        """Load, validate, and sort the posterior draws from disk.
 
-        Randomly samples n_samples rows then sorts by the first variable
-        so that input [0-1] acts as a true quantile index. Sorting preserves
+        Loads the file and then sorts by the chosen parameter column so
+        that a [0, 1] input to draw_row() acts as a true quantile index. Sorting preserves
         joint structure — all variables in a row stay together.
 
         Raises:
+            FileNotFoundError: If the file does not exist.
             ValueError: If any variable name is missing from the data columns.
         """
+        if not self.path.exists():
+            raise FileNotFoundError(
+                f"PosteriorSource: cannot find input file '{self.path}'."
+            )
+
         df = pd.read_table(self.path, sep=" ")
 
-        missing = [v for v in self.parameters if v not in df.columns]
+        missing = [p for p in self.parameters if p not in df.columns]
         if missing:
             raise ValueError(
                 f"PosteriorSource '{self.path}': columns {missing} not found. "
                 f"Available columns: {list(df.columns)}"
             )
+        sort_col = self.parameters[self.sort_param_index]
         self._draws = (
-            df[self.parameters]
-            .sort_values(by=self.parameters[self.sort_index])
-            .reset_index(drop=True)
+            df[self.parameters].sort_values(by=sort_col).reset_index(drop=True)
         )
 
     def draw_row(self, value: float) -> pd.Series:
@@ -106,10 +122,11 @@ class PosteriorSource:
             pd.Series: One row of posterior draws, indexed by variable name.
         """
         if self._draws is None:
-            raise RuntimeError(
-                f"PosteriorSource '{self.path}': prepare() must be called "
-                "before draw_row()."
-            )
+            self._load()
         n = len(self._draws)
+        if n == 0:
+            raise RuntimeError (
+                f"PosteriorSource '{self.path}' is empty  - cannot sample."
+            )
         idx = min(int(value * n), n - 1)
         return self._draws.iloc[idx]

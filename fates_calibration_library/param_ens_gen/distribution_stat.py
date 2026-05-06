@@ -34,7 +34,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-ACCPETED_STATS = {'min', 'max', 'mean', 'sd'}
+ACCEPTED_STATS = {"min", "max", "mean", "sd"}
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +44,25 @@ ACCPETED_STATS = {'min', 'max', 'mean', 'sd'}
 
 class DistributionStat(ABC):
     """Abstract base class for a set of stats for a single parameter."""
+    
+    @staticmethod
+    def from_row(row: pd.Series, stat_type: str, pft_sheet: pd.DataFrame | None=None) -> DistributionStat:
+        
+        raw = str(row.get(f"param_{stat_type}")).strip().lower()
+        if not raw:
+            raise ValueError(
+                f"Parameter '{row.get('parameter_name')}': param_{stat_type} is empty."
+            )
+        if raw == "pft":
+            if pft_sheet is None:
+                raise ValueError(
+                    f"Parameter '{row.get('parameter_name')}' has "
+                    f"param_{stat_type}='pft' but no pft_sheet was supplied."
+                )
+            return PFTStat.from_sheet(pft_sheet, f"param_{stat_type}")
+        
+        return DistributionStat.parse(raw, stat_type=stat_type)
+    
 
     @abstractmethod
     def resolve(
@@ -84,10 +103,9 @@ class DistributionStat(ABC):
             DistributionStat: A FixedStat or PercentStat.
             (PFTStat must be constructed via PFTStat.from_sheet()).
         """
-        if stat_type not in ACCPETED_STATS:
+        if stat_type not in ACCEPTED_STATS:
             raise ValueError(
-                f"Unknown stat_type '{stat_type}'. "
-                f"Valid stats: {ACCPETED_STATS}"
+                f"Unknown stat_type '{stat_type}'. " f"Valid stats: {ACCEPTED_STATS}"
             )
 
         if cell_value is None or (
@@ -108,10 +126,10 @@ class DistributionStat(ABC):
         normalised = as_str.replace(" ", "").replace("%", "percent")
 
         if "percent" in normalised:
-            
+
             # 50% of default for mean doesn't make much sense
             # but this could be removed if someone actually wants to do this
-            if stat_type == 'mean':
+            if stat_type == "mean":
                 raise ValueError(
                     f"We do not allow stat_type {stat_type} for percent stats."
                     f"Use a fixed or PFT-specific value."
@@ -134,11 +152,11 @@ class DistributionStat(ABC):
 
         # Otherwise must be a plain number
         try:
-            return FixedStat(value=float(as_str), stat_type=stat_type)
+            return FixedStat(value=float(as_str))
         except ValueError as exc:
             raise ValueError(
                 f"Could not parse stat '{cell_value}' for param_{stat_type}. "
-                "Expected a number, a percent (e.g. '50percent', '50perc', or '50%'), "
+                "Expected a number, a percent (e.g. '50percent' or '50%'), "
                 "or 'posterior'."
             ) from exc
 
@@ -147,12 +165,12 @@ class DistributionStat(ABC):
 # Concrete types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class FixedStat(DistributionStat):
     """A plain numeric stat, fully resolved at parse time."""
 
     value: float
-    stat_type: str 
 
     def resolve(self, default_value: float | np.ndarray | None = None) -> float:
         """Return the concrete stat value.
@@ -177,7 +195,7 @@ class PercentStat(DistributionStat):
     """
 
     percent: float
-    stat_type: str 
+    stat_type: str
 
     def resolve(
         self, default_value: float | np.ndarray | None = None
@@ -193,10 +211,11 @@ class PercentStat(DistributionStat):
         Returns:
             float | np.ndarray: stat
         """
-        if self.stat_type == 'mean':
-            raise ValueError(
-                "PercentStat.resolve() for a mean stat is not allowed."
-            )
+        assert self.stat_type != "mean", (
+            "PercentStat should never be constructed with stat_type='mean' — "
+            "parse() blocks this. If you removed that check, also remove PercentStat support "
+            "for mean."
+        )
         if default_value is None:
             raise ValueError(
                 "PercentStat.resolve() requires a default_value but got None."
@@ -204,13 +223,13 @@ class PercentStat(DistributionStat):
         delta = np.abs(default_value * (self.percent / 100.0))
         if self.stat_type == "min":
             return default_value - delta
-        elif self.stat_type in ['max', 'sd']:
+        if self.stat_type in ["max", "sd"]:
             return default_value + delta
-        else:
-            raise ValueError(
-                f"Cannot resolve() stat_type {self.stat_type}."
-                f"Accepted stat_types: {ACCPETED_STATS}"
-            )
+        assert False, (
+            f"Unhandled stat_type '{self.stat_type}' in PercentStat.resolve(). "
+            f"Add a branch here if you've added a new stat_type to ACCEPTED_STATS."
+        )
+
 
 @dataclass
 class PFTStat(DistributionStat):
@@ -221,7 +240,6 @@ class PFTStat(DistributionStat):
     """
 
     values: np.ndarray  # shape: (n_pfts,), dtype: float
-    stat_type: str
 
     def resolve(self, default_value: float | np.ndarray | None = None) -> np.ndarray:
         return self.values
@@ -242,7 +260,6 @@ class PFTStat(DistributionStat):
             PFTStat: PFT stat
         """
         raw = sheet[col].values
-        stat_type = col.replace('param_', '')
 
         values = []
         for i, v in enumerate(raw):
@@ -258,4 +275,4 @@ class PFTStat(DistributionStat):
 
             values.append(value)
 
-        return cls(values=np.array(values, dtype=float), stat_type=stat_type)
+        return cls(values=np.array(values, dtype=float))

@@ -9,6 +9,10 @@ N_PFTS = 3
 N_LEAFAGE = 2
 N_ORGANS = 4
 
+# ========================================================================================
+# ParamSpec fixtures
+# ========================================================================================
+
 def _base_row(**kwargs) -> pd.Series:
     """Build a minimal valid main-sheet row, with overrides."""
     defaults = {
@@ -137,7 +141,45 @@ def percent_row() -> pd.Series:
         param_min="50percent",
         param_max="50percent",
     )
+    
+# ========================================================================================
+# PosteriorSource fixtures
+# ========================================================================================
 
+@pytest.fixture
+def posterior_file(tmp_path) -> "Path":
+    """A minimal posterior text file with two parameters and 20 rows.
+ 
+    Columns: param_a, param_b
+    Values are shuffled so that _load's sort behaviour is actually tested.
+ 
+    Returns:
+        Path: path to the temporary file
+    """
+    rng = np.random.default_rng(42)
+    n = 20
+    data = pd.DataFrame({
+        "param_a": rng.permutation(np.linspace(0.1, 1.0, n)),
+        "param_b": rng.permutation(np.linspace(10.0, 20.0, n)),
+    })
+    path = tmp_path / "posterior.txt"
+    data.to_csv(path, sep=" ", index=False)
+    return path
+ 
+ 
+@pytest.fixture
+def posterior_source(posterior_file) -> "PosteriorSource":
+    """A PosteriorSource pointing at posterior_file, not yet loaded.
+ 
+    Returns:
+        PosteriorSource: unloaded source
+    """
+    from fates_calibration_library.param_ens_gen.posterior import PosteriorSource
+    return PosteriorSource(
+        path=posterior_file,
+        array_indices="all",
+        parameters=["param_a", "param_b"],
+    )
 
 @pytest.fixture
 def pft_sheet() -> pd.DataFrame:

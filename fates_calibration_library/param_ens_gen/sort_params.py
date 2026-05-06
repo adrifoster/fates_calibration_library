@@ -1,5 +1,5 @@
 from __future__ import annotations
- 
+
 from collections import defaultdict, deque
  
 from .parameter import Parameter, ScaleFromRootParameter

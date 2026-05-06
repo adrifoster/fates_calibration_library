@@ -100,7 +100,7 @@ class Parameter(ABC):
                 f"Valid types: {sorted(cls._registry)}"
             )
         return subclass(row, default_ds, pft_sheet, posterior_config)
-
+    
     @property
     def free_dim(self):
         """The single free dimension for this parameter, or None for scalars."""

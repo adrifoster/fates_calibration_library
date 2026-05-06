@@ -50,11 +50,8 @@ class ParamSpec: # pylint: disable=too-many-instance-attributes
         For 'sliced' param_type: which index along slice_dim to target.
         None for all other types.
     base_params : list[str]
-        Parameter names this parameter is linked to. Meaning depends on param_type:
-        - 'default'                 : empty
-        - 'sliced'                  : single entry - the original parameter name
-        - 'scale_from_root'         : single entry — the original parameter name
-        - 'joint'                   : all parameters this handle writes to
+        Parameter names this parameter is linked to. Meaning depends on param_type, which
+        determines the concrete class of Parameter
     root_param: str | None
         For 'scale_from_root' param_type: the parameter to scale from
         None for all other types.
@@ -149,9 +146,9 @@ class ParamSpec: # pylint: disable=too-many-instance-attributes
         )
 
 
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------
 # Private parsing helpers
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------
 
 
 def _is_nan(value: float) -> bool:

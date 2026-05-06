@@ -7,12 +7,19 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from .distribution_stat import DistributionStat, PFTStat
+from .distribution_stat import DistributionStat
 from .posterior import PosteriorSource, _DEFAULT_SORT_INDEX
 
 
 class Sampler(ABC):
-    """Abstract base for Sampler class."""
+    """Abstract base for Sampler class.
+
+    Subclasses must implement:
+        - __init__(self, row, pft_sheet, posterior_config): parse all
+          sampling configuration from the spreadsheet row at construction time.
+        - sample(...): draw a value given a normalised input.
+        - normalize(...): convert a concrete value back to normalised [0, 1].
+    """
 
     _registry: dict[str, type[Sampler]] = {}
 
@@ -21,19 +28,9 @@ class Sampler(ABC):
         Sampler._registry[sampler_type] = cls
 
     @abstractmethod
-    def __init__(
-        self,
-        row: pd.Series,
-        pft_sheet: pd.DataFrame | None = None,
-        posterior_config: dict | None = None,
-    ):
-        """Concrete class must implement this"""
-
-    @abstractmethod
     def sample(
         self,
         normalized_value: float,
-        mask: np.ndarray | None = None,
         default_value: float | np.ndarray | None = None,
         array_index: int | None = None,
         n_indices: int | None = None,
@@ -44,7 +41,6 @@ class Sampler(ABC):
     def normalize(
         self,
         value: float | np.ndarray,
-        mask: np.ndarray | None = None,
         default_value: float | np.ndarray | None = None,
         array_index: int | None = None,
         n_indices: int | None = None,
@@ -79,7 +75,9 @@ class Sampler(ABC):
                 f"Unknown strategy '{param_strategy}'. "
                 f"Valid types: {sorted(cls._registry)}"
             )
-        return subclass(row, pft_sheet, posterior_config)
+        return subclass(
+            row, pft_sheet, posterior_config
+        )  # pylint: disable=not-callable
 
 
 class UniformSampler(Sampler, sampler_type="uniform"):
@@ -103,31 +101,17 @@ class UniformSampler(Sampler, sampler_type="uniform"):
         min_raw = str(row.get("param_min", "")).strip().lower()
         max_raw = str(row.get("param_max", "")).strip().lower()
 
-        if min_raw == "" or max_raw == "":
+        if (min_raw == "pft") != (max_raw == "pft"):
             raise ValueError(
-                "Parameters with strategy=uniform must supply a 'param_min' and 'param_max' value"
+                f"Parameter '{row.get('parameter_name')}': param_min and param_max "
+                "must both be 'pft' or neither — mixing is not supported."
             )
 
-        if min_raw == "pft" or max_raw == "pft":
-            if min_raw != max_raw:
-                raise ValueError(
-                    f"Parameter '{row.get('parameter_name')}': param_min and param_max "
-                    "must both be 'pft' or neither — mixing is not supported."
-                )
-            if pft_sheet is None:
-                raise ValueError(
-                    f"Parameter '{row.get('parameter_name')}' has "
-                    "param_min or param_max == 'pft' but no pft_sheet was supplied."
-                )
-            self.min_stat = PFTStat.from_sheet(pft_sheet, "param_min")
-            self.max_stat = PFTStat.from_sheet(pft_sheet, "param_max")
-        else:
-            self.min_stat = DistributionStat.parse(min_raw, stat_type="min")
-            self.max_stat = DistributionStat.parse(max_raw, stat_type="max")
+        self.min_stat = DistributionStat.from_row(row, "min", pft_sheet)
+        self.max_stat = DistributionStat.from_row(row, "max", pft_sheet)
 
     def resolve_bounds(
         self,
-        mask: np.ndarray | None,
         default_value: float | np.ndarray | None,
     ) -> tuple[float | np.ndarray, float | np.ndarray]:
         """Resolve min and max bounds and return (min_val, max_val).
@@ -143,34 +127,32 @@ class UniformSampler(Sampler, sampler_type="uniform"):
         min_val = self.min_stat.resolve(default_value)
         max_val = self.max_stat.resolve(default_value)
 
-        _validate_bounds(min_val, max_val, mask=mask)
+        _validate_bounds(min_val, max_val)
 
         return min_val, max_val
 
     def sample(
         self,
         normalized_value: float,
-        mask: np.ndarray | None = None,
         default_value: float | np.ndarray | None = None,
         array_index: int | None = None,
         n_indices: int | None = None,
     ):
 
-        min_val, max_val = self.resolve_bounds(mask, default_value)
+        min_val, max_val = self.resolve_bounds(default_value)
 
         return min_val + normalized_value * (max_val - min_val)
 
     def normalize(
         self,
         value: float,
-        mask: np.ndarray | None = None,
         default_value: float | np.ndarray | None = None,
         array_index: int | None = None,
         n_indices: int | None = None,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value."""
 
-        min_val, max_val = self.resolve_bounds(mask, default_value)
+        min_val, max_val = self.resolve_bounds(default_value)
 
         # normalize
         return (value - min_val) / (max_val - min_val)
@@ -205,38 +187,32 @@ class PosteriorSampler(Sampler, sampler_type="posterior"):
                 path=Path(file_entry["path"]),
                 array_indices=file_entry["array_indices"],
                 parameters=self.parameters,
-                sort_index=posterior_config.get("sort_index", _DEFAULT_SORT_INDEX),
+                sort_param_index=posterior_config.get("sort_index", _DEFAULT_SORT_INDEX),
             )
             for file_entry in posterior_config["files"]
         ]
         self.sources = sources
-
-        for source in self.sources:
-            source.prepare()
-
+        
     def sample(
         self,
         normalized_value: float,
-        mask: np.ndarray | None = None,
         default_value: float | np.ndarray | None = None,
         array_index: int | None = None,
         n_indices: int | None = None,
     ):
         if array_index is not None:
             return self._draw_for_index(normalized_value, array_index)
-        else:
-            return self._draw_broadcast(normalized_value, n_indices)
+        return self._draw_broadcast(normalized_value, n_indices)
 
     def normalize(
         self,
         value: float | np.ndarray,
-        mask: np.ndarray | None = None,
         default_value: float | np.ndarray | None = None,
         array_index: int | None = None,
         n_indices: int | None = None,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value."""
-        pass
+        raise NotImplementedError
 
     def _draw_for_index(self, value: float, array_index: int) -> list[np.ndarray]:
         source = self._source_for_index(array_index)
@@ -275,7 +251,6 @@ class PosteriorSampler(Sampler, sampler_type="posterior"):
 def _validate_bounds(
     min_val: float | np.ndarray,
     max_val: float | np.ndarray,
-    mask: np.ndarray | None = None,
 ) -> None:
     """Raise error if any min > max after resolution
 
@@ -288,15 +263,12 @@ def _validate_bounds(
     """
     if min_val is None or max_val is None:
         raise ValueError(
-            f"Parameter min or max is None  - cannot scale"
+            f"Parameter min or max is None  - cannot scale "
             f"(min={min_val}, max={max_val}). Check inputs"
         )
 
     min_arr = np.asarray(min_val)
     max_arr = np.asarray(max_val)
-    if mask is not None and min_arr.ndim > 0:
-        min_arr = min_arr[mask]
-        max_arr = max_arr[mask]
     if np.any(min_arr > max_arr):
         raise ValueError(
             f"Parameter has min > max " f"(min={min_val}, max={max_val}). Check inputs"
