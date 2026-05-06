@@ -141,7 +141,7 @@ class UniformSampler(Sampler, sampler_type="uniform"):
         """
 
         min_val = self.min_stat.resolve(default_value)
-        max_val = self.min_stat.resolve(default_value)
+        max_val = self.max_stat.resolve(default_value)
 
         _validate_bounds(min_val, max_val, mask=mask)
 

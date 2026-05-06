@@ -3,9 +3,8 @@ Parameter - classes for parameter logic
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import NamedTuple, Optional
 import pandas as pd
 import numpy as np
 import xarray as xr
@@ -13,8 +12,8 @@ import xarray as xr
 from .param_spec import ParamSpec
 from .sampler import Sampler
 
-@dataclass
-class DimIndex:
+
+class DimIndex(NamedTuple):
     """A pinned position in a single dimension.
 
     Used on expanded Parameter objects to record which dimension and index
@@ -29,6 +28,7 @@ class DimIndex:
 
     dim: str
     index: int
+
 
 class Parameter(ABC):
     """Abstract base for parameter logic.
@@ -51,19 +51,22 @@ class Parameter(ABC):
         Parameter._registry[param_type] = cls
 
     def __init__(
-            self,
-            row: pd.Series,
-            default_ds: xr.Dataset,
-            pft_sheet: pd.DataFrame | None = None,
-            posterior_config: dict | None = None,
-            ):
+        self,
+        row: pd.Series,
+        default_ds: xr.Dataset,
+        pft_sheet: pd.DataFrame | None = None,
+        posterior_config: dict | None = None,
+    ):
         self.spec = ParamSpec.from_row(row)
         self.sampler = Sampler.from_row_and_sheet(row, pft_sheet, posterior_config)
         self.active_index: Optional[DimIndex] = None
-        self.validate(default_ds)
-            
-        self.free_dim = self.spec.free_dims[0] if self.spec.free_dims else None
-        self.n_indices = default_ds.sizes.get(self.free_dim, 1) if self.free_dim else 1
+
+        # store only sizes so we don't  hold a reference to the full dataset.
+        # this is used by the n_indices property without ordering constraints.
+        self._dim_sizes: dict[str, int] = dict(default_ds.sizes)
+
+        self._validate_spec()
+        self._validate_dataset(default_ds)
 
     @classmethod
     def from_row(
@@ -72,9 +75,23 @@ class Parameter(ABC):
         default_ds: xr.Dataset,
         pft_sheet: pd.DataFrame | None = None,
         posterior_config: dict | None = None,
-
     ) -> Parameter:
-        """Construct the correct Parameter subclass from a spreadsheet row."""
+        """Construct the correct Parameter subclass from a spreadsheet row.
+
+        Args:
+            row (pd.Series): A row from the 'main' sheet DataFrame.
+            default_ds (xr.Dataset): The default parameter dataset.
+            pft_sheet (pd.DataFrame | None, optional): Optional per-PFT bounds sheet.
+                Defaults to None.
+            posterior_config (dict | None, optional): Optional posterior sampling
+                configuration. Defaults to None.
+
+        Raises:
+            ValueError: If param_type is not registered.
+
+        Returns:
+            Parameter: An instance of the appropriate Parameter subclass.
+        """
         param_type = str(row.get("param_type", "")).strip()
         subclass = cls._registry.get(param_type)
         if subclass is None:
@@ -83,11 +100,41 @@ class Parameter(ABC):
                 f"Valid types: {sorted(cls._registry)}"
             )
         return subclass(row, default_ds, pft_sheet, posterior_config)
-    
-    def validate(self, default_ds: xr.Dataset) -> None:
-        variables_to_check = self._variables_to_validate()
-        
-        for var in variables_to_check:
+
+    @property
+    def free_dim(self):
+        """The single free dimension for this parameter, or None for scalars."""
+        return self.spec.free_dims[0] if self.spec.free_dims else None
+
+    @property
+    def n_indices(self) -> int:
+        """Number of positions along the free dimension (1 for scalars)."""
+        return self._dim_sizes.get(self.free_dim, 1) if self.free_dim else 1
+
+    def _validate_spec(self) -> None:
+        """Validate type-specific required fields on self.spec.
+
+        Called from __init__ after self.spec is set. The base implementation
+        is a no-op; subclasses override to assert the fields they require.
+        This is intentionally not abstract — types with no extra required
+        fields (e.g. DefaultParameter) need not override.
+        """
+
+    def _validate_dataset(self, default_ds: xr.Dataset) -> None:
+        """Check that all variables this parameter touches exist in default_ds
+        with the correct dimensions.
+
+        For sliced parameters, spec.dims includes the slice dimension because
+        it reflects the full variable shape in the dataset. The slice is an
+        access pattern, not a dataset shape change.
+
+        Args:
+            default_ds (xr.Dataset): The default parameter dataset.
+
+        Raises:
+            ValueError: If a variable is missing or has unexpected dimensions.
+        """
+        for var in self._variables_to_validate():
             if var not in default_ds:
                 raise ValueError(
                     f"Parameter '{self.spec.name}': variable '{var}' not found "
@@ -101,20 +148,19 @@ class Parameter(ABC):
                     f"{actual_dims} in default dataset but spec.dims is "
                     f"{self.spec.dims}. Dimensions must match exactly."
                 )
-                
+
+    @abstractmethod
     def _variables_to_validate(self) -> list[str]:
-        """Returns parameter names this parameter touches.
-        
-        The default implementation covers DefaultParameter (spec.name) and any
-        type that uses base_params. Subclasses override only if they need different
-        logic (ScaleFromRootParameter also reads root_params)
+        """Return the variable names in the dataset that this parameter touches.
+
+        Each subclass must implement this explicitly so that _validate_dataset
+        checks exactly the right variables. Abstract rather than a shared
+        default to prevent new subclasses from silently inheriting incorrect
+        behaviour.
 
         Returns:
-            list[str]: list of actual parameters this parameter handle touches
+            List of variable name strings.
         """
-        if self.spec.base_params:
-            return self.spec.base_params
-        return [self.spec.name]
 
     @abstractmethod
     def get_default(
@@ -148,10 +194,17 @@ class Parameter(ABC):
                 0-based indices to hold at default. None means no indices are fixed
         """
 
-    @abstractmethod
-    def sample(self, normalized_value: float, default_ds: xr.Dataset,
-              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
+    def sample(
+        self,
+        normalized_value: float,
+        default_ds: xr.Dataset,
+        fixed_indices: dict[str, list[int]],
+    ) -> float | np.ndarray:
         """Sample a parameter given an input normalized value
+
+        The default implementation computes a free-dimension mask from
+        fixed_indices and delegates to self.sampler. Subclasses override
+        _sample_mask if they need different masking behaviour.
 
         Args:
             normalized_value (float): normalized value [0-1] used to sample
@@ -160,8 +213,35 @@ class Parameter(ABC):
             fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
 
         Returns:
-            float
+            float: Sampled parameter value.
         """
+        default_value = self.get_default(default_ds)
+        mask = self._sample_mask(default_value, fixed_indices)
+        array_index = self.active_index.index if self.active_index is not None else None
+        return self.sampler.sample(
+            normalized_value, mask, default_value, array_index, self.n_indices
+        )
+
+    def _sample_mask(
+        self,
+        default_value: float | np.ndarray | list[np.ndarray],
+        fixed_indices: dict[str, list[int]],
+    ) -> np.ndarray | slice:
+        """Compute the mask of free (non-fixed) positions for sampling.
+
+        The default implementation derives the mask from free_dim and
+        fixed_indices. Subclasses override this when their sampler handles
+        masking differently (e.g. JointParameter returns None).
+
+        Args:
+            default_value: Default value array for this parameter.
+            fixed_indices: Mapping of dimension name to fixed 0-based indices.
+
+        Returns:
+            Boolean mask array (True = free), or slice(None) if nothing is fixed.
+        """
+        return _free_mask(np.asarray(default_value), self.free_dim, fixed_indices)
+
 
 # ----------------------------------------------------------------------------------------
 # Concrete Parameter classes
@@ -171,15 +251,10 @@ class Parameter(ABC):
 class DefaultParameter(Parameter, param_type="default"):
     """Standard parameter: written directly to ds[name]."""
 
+    def _variables_to_validate(self) -> list[str]:
+        return [self.spec.name]
+
     def get_default(self, default_ds: xr.Dataset) -> np.ndarray:
-        """Extract the relevant default value(s) from a parameter dataset.
-
-        Args:
-            default_ds (xr.Dataset): The default parameter dataset
-
-        Returns:
-            float | np.ndarray | list[np.ndarray]: default value
-        """
         return default_ds[self.spec.name].values
 
     def set_value(
@@ -189,59 +264,41 @@ class DefaultParameter(Parameter, param_type="default"):
         value: float | np.ndarray,
         fixed_indices: dict[str, list[int]] | None = None,
     ) -> None:
-        """Write a value into the working dataset.
-
-        Args:
-            ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
-            default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
-            value (float | np.ndarray | list[np.ndarray]): Value to write
-            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
-                0-based indices to hold at default. None means no indices are fixed
-        """
-
         arr = ds[self.spec.name].values.copy()
 
         if self.active_index is not None:
             arr[self.active_index.index] = _as_scalar(value, self.spec.name)
         else:
-            fixed = (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
+            fixed = (
+                (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
+            )
             arr = _broadcast_to_array(arr, value, fixed, self.spec.name)
 
         ds[self.spec.name].values = arr
-        
-    def sample(self, normalized_value: float, default_ds: xr.Dataset,
-              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
-        """Sample a parameter given an input normalized value
-
-        Args:
-            normalized_value (float): normalized value [0-1] used to sample
-            default_ds (xr.Dataset): default parameter dataset. used for validating
-                dimensions and indices
-            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
-
-        Returns:
-            float | np.ndarray: sampled parameter value
-        """
-        
-        default_value = self.get_default(default_ds)
-        mask = _free_mask(default_value, self.free_dim, fixed_indices)
-        array_index = self.active_index.index if self.active_index is not None else None
-        return self.sampler.sample(normalized_value, mask, default_value,
-                                   array_index, self.n_indices)
 
 
 class SlicedParameter(Parameter, param_type="sliced"):
     """Parameter that targets one slice of a dimension."""
 
+    def _validate_spec(self) -> None:
+        """Require slice_dim, slice_index, and base_params to all be set."""
+        missing = []
+        if self.spec.slice_dim is None:
+            missing.append("slice_dim")
+        if self.spec.slice_index is None:
+            missing.append("slice_index")
+        if not self.spec.base_params:
+            missing.append("base_params")
+        if missing:
+            raise ValueError(
+                f"Parameter '{self.spec.name}' has param_type 'sliced' but the "
+                f"following required fields are not set: {missing}."
+            )
+
+    def _variables_to_validate(self) -> list[str]:
+        return self.spec.base_params
+
     def get_default(self, default_ds: xr.Dataset) -> np.ndarray:
-        """Extract the relevant default value(s) from a parameter dataset.
-
-        Args:
-            default_ds (xr.Dataset): The default parameter dataset
-
-        Returns:
-            float | np.ndarray | list[np.ndarray]: default value
-        """
         return (
             default_ds[self.spec.base_params[0]]
             .isel({self.spec.slice_dim: self.spec.slice_index})
@@ -255,16 +312,6 @@ class SlicedParameter(Parameter, param_type="sliced"):
         value: float | np.ndarray,
         fixed_indices: dict[str, list[int]] | None = None,
     ) -> None:
-        """Write a value into the working dataset.
-
-        Args:
-            ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
-            default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
-            value (float | np.ndarray | list[np.ndarray]): Value to write
-            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
-                0-based indices to hold at default. None means no indices are fixed
-        """
-
         arr = ds[self.spec.base_params[0]].values.copy()
         da_dims = list(ds[self.spec.base_params[0]].dims)
         slice_axis = da_dims.index(self.spec.slice_dim)
@@ -277,7 +324,9 @@ class SlicedParameter(Parameter, param_type="sliced"):
             idx[da_dims.index(self.active_index.dim)] = self.active_index.index
             arr[tuple(idx)] = _as_scalar(value, self.spec.base_params[0])
         else:
-            fixed = (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
+            fixed = (
+                (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
+            )
             slice_arr = arr[tuple(idx)].copy()
             slice_arr = _broadcast_to_array(
                 slice_arr, value, fixed, self.spec.base_params[0]
@@ -285,48 +334,32 @@ class SlicedParameter(Parameter, param_type="sliced"):
             arr[tuple(idx)] = slice_arr
 
         ds[self.spec.base_params[0]].values = arr
-        
-    def sample(self, normalized_value: float, default_ds: xr.Dataset,
-              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
-        """Sample a parameter given an input normalized value
-
-        Args:
-            normalized_value (float): normalized value [0-1] used to sample
-            default_ds (xr.Dataset): default parameter dataset. used for validating
-                dimensions and indices
-            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
-
-        Returns:
-            float | np.ndarray: sampled parameter value
-        """
-        
-        default_value = self.get_default(default_ds)
-        mask = _free_mask(default_value, self.free_dim, fixed_indices)
-        array_index = self.active_index.index if self.active_index is not None else None
-        return self.sampler.sample(normalized_value, mask, default_value,
-                                   array_index, self.n_indices)
 
 
 class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
     """Parameter whose value is root + delta."""
-    
-    
+
+    def _validate_spec(self) -> None:
+        """Require root_param and base_params to both be set."""
+        missing = []
+        if self.spec.root_param is None:
+            missing.append("root_param")
+        if not self.spec.base_params:
+            missing.append("base_params")
+        if missing:
+            raise ValueError(
+                f"Parameter '{self.spec.name}' has param_type 'scale_from_root' "
+                f"but the following required fields are not set: {missing}."
+            )
+
     def _variables_to_validate(self) -> list[str]:
-        """Include root_param in validation in addition to base_params."""
+        """Include both base_params and root_param in dataset validation."""
         variables = list(self.spec.base_params)
-        if self.spec.root_param and self.spec.root_param not in variables:
+        if self.spec.root_param not in variables and self.spec.root_param is not None:
             variables.append(self.spec.root_param)
         return variables
 
     def get_default(self, default_ds: xr.Dataset) -> np.ndarray:
-        """Extract the relevant default value(s) from a parameter dataset.
-
-        Args:
-            default_ds (xr.Dataset): The default parameter dataset
-
-        Returns:
-            float | np.ndarray | list[np.ndarray]: default value
-        """
         return default_ds[self.spec.base_params[0]].values
 
     def set_value(
@@ -336,16 +369,6 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
         value: float | np.ndarray,
         fixed_indices: dict[str, list[int]] | None = None,
     ) -> None:
-        """Write a value into the working dataset.
-
-        Args:
-            ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
-            default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
-            value (float | np.ndarray | list[np.ndarray]): Value to write
-            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
-                0-based indices to hold at default. None means no indices are fixed
-        """
-
         root_arr = ds[self.spec.root_param].values.copy()  # already written
         arr = ds[self.spec.base_params[0]].values.copy()
         delta = value
@@ -354,52 +377,44 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
             i = self.active_index.index
             arr[i] = root_arr[i] + delta
         else:
-            fixed = (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
+            fixed = (
+                (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
+            )
 
             if arr.ndim == 0 or not self.spec.free_dims:
                 arr = root_arr + delta
             else:
                 default_arr = default_ds[self.spec.base_params[0]].values
-                for i in range(len(arr)):
-                    if i in fixed:
-                        arr[i] = default_arr[i]
-                    else:
-                        arr[i] = root_arr[i] + delta
+                arr = root_arr + delta
+                if fixed:
+                    arr[fixed] = default_arr[fixed]
 
         ds[self.spec.base_params[0]].values = arr
 
-    def sample(self, normalized_value: float, default_ds: xr.Dataset,
-              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
-        """Sample a parameter given an input normalized value
-
-        Args:
-            normalized_value (float): normalized value [0-1] used to sample
-            default_ds (xr.Dataset): default parameter dataset. used for validating
-                dimensions and indices
-            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
-
-        Returns:
-            float | np.ndarray: sampled parameter value
-        """
-        
-        default_value = self.get_default(default_ds)
-        mask = _free_mask(default_value, self.free_dim, fixed_indices)
-        array_index = self.active_index.index if self.active_index is not None else None
-        return self.sampler.sample(normalized_value, mask, default_value,
-                                   array_index, self.n_indices)
 
 class JointParameter(Parameter, param_type="joint"):
     """Parameter which stands for multiple connected parameters (e.g. posterior draws)."""
 
+    def _validate_spec(self) -> None:
+        """Require base_params to be non-empty."""
+        if not self.spec.base_params:
+            raise ValueError(
+                f"Parameter '{self.spec.name}' has param_type 'joint' but "
+                "base_params is not set."
+            )
+
+    def _variables_to_validate(self) -> list[str]:
+        return self.spec.base_params
+
+    def _sample_mask(
+        self,
+        default_value: float | np.ndarray | list[np.ndarray],
+        fixed_indices: dict[str, list[int]],
+    ) -> None:
+        """Joint sampler handles masking internally; no mask is passed."""
+        return None
+
     def get_default(self, default_ds: xr.Dataset) -> list[np.ndarray]:
-        """Extract the relevant default value(s) from a parameter dataset.
-
-        Args:
-            default_ds (xr.Dataset): The default parameter dataset
-
-        Returns:
-            float | np.ndarray | list[np.ndarray]: default value
-        """
         return [default_ds[p].values for p in self.spec.base_params]
 
     def set_value(
@@ -409,15 +424,6 @@ class JointParameter(Parameter, param_type="joint"):
         value: float | np.ndarray,
         fixed_indices: dict[str, list[int]] | None = None,
     ) -> None:
-        """Write a value into the working dataset.
-
-        Args:
-            ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
-            default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
-            value (float | np.ndarray | list[np.ndarray]): Value to write
-            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
-                0-based indices to hold at default. None means no indices are fixed
-        """
         value_arr = np.asarray(value)
         if len(value_arr) != len(self.spec.base_params):
             raise ValueError(
@@ -429,30 +435,15 @@ class JointParameter(Parameter, param_type="joint"):
             if self.active_index is not None:
                 arr[self.active_index.index] = _as_scalar(val, parameter)
             else:
-                fixed = (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
+                fixed = (
+                    (fixed_indices or {}).get(self.free_dim, [])
+                    if self.free_dim
+                    else []
+                )
                 arr = _broadcast_to_array(arr, val, fixed, parameter)
-            
+
             ds[parameter].values = arr
 
-    def sample(self, normalized_value: float, default_ds: xr.Dataset,
-              fixed_indices: dict[str, list[int]]) -> float | np.ndarray:
-        """Sample a parameter given an input normalized value
-
-        Args:
-            normalized_value (float): normalized value [0-1] used to sample
-            default_ds (xr.Dataset): default parameter dataset. used for validating
-                dimensions and indices
-            fixed_indices (dict[str, list[int]]): 0-based indices to hold at default.
-
-        Returns:
-            float | np.ndarray: sampled parameter value
-        """
-        
-        default_value = self.get_default(default_ds)
-        mask = None
-        array_index = self.active_index.index if self.active_index is not None else None
-        return self.sampler.sample(normalized_value, mask, default_value,
-                                   array_index, self.n_indices)
 
 def _broadcast_to_array(
     arr: np.ndarray,
@@ -477,27 +468,24 @@ def _broadcast_to_array(
     Returns:
         np.ndarray: output array
     """
-
     value_arr = np.asarray(value)
-
-    if value_arr.ndim == 0:
-        if arr.ndim == 0:
-            arr = float(value_arr)
-        else:
-            for i in range(len(arr)):
-                if i not in fixed:
-                    arr[i] = float(value_arr)
+    if value_arr.ndim > 0 and value_arr.shape != arr.shape:
+        raise ValueError(
+            f"Parameter '{name}': value shape {value_arr.shape} does not "
+            f"match target array shape {arr.shape}."
+        )
+    
+    result = arr.copy()
+    free = [i for i in range(len(result)) if i not in fixed] if arr.ndim > 0 else None
+    
+    if free is None:
+        result = float(value_arr)
+    elif value_arr.ndim == 0:
+        result[free] = float(value_arr)
     else:
-        if value_arr.shape != arr.shape:
-            raise ValueError(
-                f"Parameter '{name}': value shape {value_arr.shape} does not "
-                f"match target array shape {arr.shape}."
-            )
-        for i in range(len(arr)):
-            if i not in fixed:
-                arr[i] = value_arr[i]
+        result[free] = value_arr[free]
 
-    return arr
+    return result
 
 
 def _as_scalar(value: float | np.ndarray, name: str) -> float:
@@ -521,6 +509,7 @@ def _as_scalar(value: float | np.ndarray, name: str) -> float:
         )
     return float(arr)
 
+
 def _free_mask(
     arr: np.ndarray,
     free_dim: str | None,
@@ -531,22 +520,22 @@ def _free_mask(
     Args:
         arr (np.ndarray): input array
         free_dim (str | None): dimension to scale along
-        fixed_indices (dict[str, list[int]]): Mapping of dimension 
+        fixed_indices (dict[str, list[int]]): Mapping of dimension
             name to 0-based indices to hold at default.
 
     Returns:
         np.ndarray | slice: mask
     """
-    
+
     # nothing to mask (we have a float)
     if free_dim is None or arr.ndim == 0:
         return slice(None)
-   
+
     # fixed indices doesn't exist on this dim
     fixed = fixed_indices.get(free_dim, [])
     if not fixed:
         return slice(None)
-    
+
     mask = np.ones(arr.shape[0], dtype=bool)
     mask[fixed] = False
     return mask

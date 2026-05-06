@@ -1,21 +1,24 @@
-"""ParamSpec class - fully self-describing calibratable FATES parameter."""
+"""ParamSpec class - metadata for a parameter."""
 
 from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
 from typing import Optional
+import math
 
 import pandas as pd
 
 _REQUIRED_COLUMNS: frozenset[str] = frozenset({"parameter_name", "coord", "param_type"})
+
+
 @dataclass
-class ParamSpec:
+class ParamSpec: # pylint: disable=too-many-instance-attributes
     """All metadata for a single calibratable parameter. Belongs to a Parameter object.
-    
-    Note: 
-    This is a pure data container which mirrors exactly one row of the input calibration 
-    spreadsheet. It has no knowledge of parameter datasets or distribution 
+
+    Note:
+    This is a pure data container which mirrors exactly one row of the input calibration
+    spreadsheet. It has no knowledge of parameter datasets or distribution
     resolution — those concerns belong to Parameter, which owns a ParamSpec instance.
 
     Attributes
@@ -71,7 +74,7 @@ class ParamSpec:
 
     def __post_init__(self):
         """Validate field-level invariants that hold regardless of param_type.
- 
+
         These are constraints on the fields themselves — a slice field being set
         on a non-sliced type is always wrong, regardless of what the type-specific
         logic does. Type-specific required-field validation (e.g. 'sliced needs
@@ -96,6 +99,7 @@ class ParamSpec:
                 f"Parameter '{self.name}' has root_param set but param_type "
                 f"is '{self.param_type}', not 'scale_from_root'."
             )
+
     @property
     def free_dims(self) -> list[str]:
         """Dimensions that are not pinned by a slice.
@@ -123,15 +127,13 @@ class ParamSpec:
 
         missing = _REQUIRED_COLUMNS - set(row.index)
         if missing:
-            raise KeyError(
-                f"Row is missing required columns: {sorted(missing)}"
-            )
+            raise KeyError(f"Row is missing required columns: {sorted(missing)}")
         blank = [col for col in _REQUIRED_COLUMNS if not str(row[col]).strip()]
         if blank:
             raise ValueError(
                 f"Row has blank values in required columns: {sorted(blank)}"
             )
-        
+
         return cls(
             name=str(row["parameter_name"]),
             category=str(row.get("category", "")),
@@ -146,20 +148,23 @@ class ParamSpec:
             root_param=_parse_optional_str(row.get("root_param")),
         )
 
+
 # ---------------------------------------------------------------------------
 # Private parsing helpers
 # ---------------------------------------------------------------------------
 
+
 def _is_nan(value: float) -> bool:
     """Return True if *value* is a float NaN."""
     try:
-        return value != value  # NaN is the only float not equal to itself
+        return math.isnan(value)
     except TypeError:
         return False
 
+
 def _parse_dims(value: str | None) -> list[str]:
     """Parse a coord cell like \"['fates_pft']\" into a list of strings.
-    
+
     An explicit empty-list string (``"[]"``) is the correct way to signal
     a scalar parameter. A missing / NaN value raises ``ValueError`` so that
     accidental blank cells in the spreadsheet are caught early rather than
