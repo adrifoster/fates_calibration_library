@@ -42,12 +42,28 @@ class Parameter(ABC):
     active_index: DimIndex | None
         Set by the expansion step on expanded Parameters. Records which dimension
         and index this Parameter is responsible for. None on unexpanded Parameters.
+        
+    Notes
+    -----
+    Subclass registration
+        New subclasses are registered automatically via ``__init_subclass__``.
+        The registry is frozen at module load time (see ``_freeze_registry``),
+        so ``param_type`` values sourced from untrusted input (e.g. spreadsheets)
+        cannot invoke arbitrary classes added after import.
+    
     """
 
     _registry: dict[str, type[Parameter]] = {}
+    _registry_frozen: bool = False
 
     def __init_subclass__(cls, param_type: str, **kwargs):
         super().__init_subclass__(**kwargs)
+        if Parameter._registry_frozen:
+            raise TypeError(
+                f"Cannot register new Parameter subclass '{cls.__name__}': "
+                "the registry is frozen. Define all subclasses before module "
+                "load completes."
+            )
         Parameter._registry[param_type] = cls
 
     def __init__(
@@ -103,11 +119,24 @@ class Parameter(ABC):
     
     @property
     def free_dim(self)-> str | None:
-        """The single free dimension for this parameter, or None for scalars."""
+        """The single free dimension for this parameter, or None for scalars.
+        
+        For sliced parameters the slice dimension is excluded, leaving at most
+        one free dimension. For scalar parameters (no dims) this returns None
+        
+        Returns:
+            str | None: Dimension name, or None when this parameter is scalar.
+        
+        """
         if self.spec.slice_dim is None:
             free_dims = self.spec.dims
         else:
             free_dims = [d for d in self.spec.dims if d != self.spec.slice_dim]
+        if len(free_dims) > 1:
+            raise ValueError(
+                f"free_dims: {free_dims} cannot be more than one dimension. "
+                "Not sure how to sample this type of parameter."
+            )
         return free_dims[0] if free_dims else None
     
 
@@ -229,11 +258,7 @@ class Parameter(ABC):
         default_value: float | np.ndarray | list[np.ndarray],
     ) -> SampleContext:
         """Build a SampleContext for this parameter.
- 
-        The default implementation populates all fields. Subclasses override
-        this when their sampler needs different context (e.g. JointParameter
-        passes mask=None since its posterior sampler handles masking internally).
- 
+
         Args:
             default_value: Default value(s) for this parameter.
             fixed_indices: Mapping of dimension name to fixed 0-based indices.
@@ -246,6 +271,18 @@ class Parameter(ABC):
             array_index=self.active_index.index if self.active_index is not None else None,
             n_indices=self.n_indices,
         )
+    
+def _freeze_registry():
+    """Prevent further registration of Parameter subclasses.
+
+    Called once at the bottom of this module, after all built-in subclasses
+    are defined. Any attempt to define a new Parameter subclass after this
+    point (e.g. from untrusted spreadsheet-driven code) will raise TypeError.
+
+    This is a defence-in-depth measure: ``param_type`` strings sourced from
+    user input can only ever resolve to the classes that existed at import time.
+    """
+    Parameter._registry_frozen = True
 
 # ----------------------------------------------------------------------------------------
 # Concrete Parameter classes
@@ -265,7 +302,7 @@ class DefaultParameter(Parameter, param_type="default"):
         self,
         ds: xr.Dataset,
         default_ds: xr.Dataset,
-        value: float | np.ndarray,
+        value: float | np.ndarray | list[np.ndarray],
         fixed_indices: dict[str, list[int]] | None = None,
     ) -> None:
         arr = ds[self.spec.name].values.copy()
@@ -285,7 +322,7 @@ class SlicedParameter(Parameter, param_type="sliced"):
     """Parameter that targets one slice of a dimension."""
 
     def _validate_spec(self) -> None:
-        """Require slice_dim, slice_index, and base_params to all be set."""
+        """Require slice_dim, slice_index, and base_params to all be set. Also len(base_params) == 1."""
         missing = []
         if self.spec.slice_dim is None:
             missing.append("slice_dim")
@@ -297,6 +334,12 @@ class SlicedParameter(Parameter, param_type="sliced"):
             raise ValueError(
                 f"Parameter '{self.spec.name}' has param_type 'sliced' but the "
                 f"following required fields are not set: {missing}."
+            )
+        if len(self.spec.base_params) > 1:
+            raise ValueError(
+                f"Too many base_params for parameter {self.spec.name}. "
+                "Shouldn't have more than one base_param for SlicedParameters. "
+                f"Got {len(self.spec.base_params)}: {self.spec.base_params}"
             )
 
     def _variables_to_validate(self) -> list[str]:
@@ -313,7 +356,7 @@ class SlicedParameter(Parameter, param_type="sliced"):
         self,
         ds: xr.Dataset,
         default_ds: xr.Dataset,
-        value: float | np.ndarray,
+        value: float | np.ndarray | list[np.ndarray],
         fixed_indices: dict[str, list[int]] | None = None,
     ) -> None:
         arr = ds[self.spec.base_params[0]].values.copy()
@@ -341,10 +384,20 @@ class SlicedParameter(Parameter, param_type="sliced"):
 
 
 class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
-    """Parameter whose value is root + delta."""
+    """Parameter whose value is root + delta.
+    
+    
+    .. warning::
+        **Write-order dependency.** ``set_value`` reads the current value of
+        ``ds[root_param]`` and expects it to have already been written during
+        this sampling step.  Callers (e.g. the ensemble driver) **must** write
+        root parameters before any ``ScaleFromRootParameter`` that depends on
+        them.  Violating this order produces silently incorrect values rather
+        than an error.
+    """
 
     def _validate_spec(self) -> None:
-        """Require root_param and base_params to both be set."""
+        """Require root_param and base_params to both be set. Also len(base_params) == 1."""
         missing = []
         if self.spec.root_param is None:
             missing.append("root_param")
@@ -354,6 +407,12 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
             raise ValueError(
                 f"Parameter '{self.spec.name}' has param_type 'scale_from_root' "
                 f"but the following required fields are not set: {missing}."
+            )
+        if len(self.spec.base_params) > 1:
+            raise ValueError(
+                f"Too many base_params for parameter {self.spec.name}. "
+                "Shouldn't have more than one base_param for SlicedParameters. "
+                f"Got {len(self.spec.base_params)}: {self.spec.base_params}"
             )
 
     def _variables_to_validate(self) -> list[str]:
@@ -370,9 +429,10 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
         self,
         ds: xr.Dataset,
         default_ds: xr.Dataset,
-        value: float | np.ndarray,
+        value: float | np.ndarray | list[np.ndarray],
         fixed_indices: dict[str, list[int]] | None = None,
     ) -> None:
+        # root_param must already be written by the caller — see class docstring.
         root_arr = ds[self.spec.root_param].values.copy()  # already written
         arr = ds[self.spec.base_params[0]].values.copy()
         delta = value
@@ -397,9 +457,17 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
 
 
 class JointParameter(Parameter, param_type="joint"):
-    """Parameter which stands for multiple connected parameters (e.g. posterior draws)."""
+    """Parameter which stands for multiple connected parameters (e.g. posterior draws).
+    
+    The ``value`` passed to ``set_value`` and returned by ``sample`` is a
+    sequence of arrays — one per entry in ``spec.base_params``.  The type
+    annotations on the base class use ``float | np.ndarray | list[np.ndarray]``
+    for generality, but for this subclass only ``list[np.ndarray]`` (or any
+    sequence of array-likes of the same length as ``base_params``) is valid.
+    
+    """
 
-    def _validate_spec(self) -> None:
+    def _validate_spec(self):
         """Require base_params to be non-empty."""
         if not self.spec.base_params:
             raise ValueError(
@@ -417,16 +485,39 @@ class JointParameter(Parameter, param_type="joint"):
         self,
         ds: xr.Dataset,
         default_ds: xr.Dataset,
-        value: float | np.ndarray,
+        value: float | np.ndarray | list[np.ndarray],
         fixed_indices: dict[str, list[int]] | None = None,
-    ) -> None:
-        value_arr = np.asarray(value)
-        if len(value_arr) != len(self.spec.base_params):
+    ):
+        """"Write a list of arrays into the dataset, one per base_param.
+
+        Args:
+            ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
+            default_ds (xr.Dataset): Unchanging default dataset.
+            value (float | np.ndarray | list[np.ndarray]): One array per entry in ``spec.base_params``.
+                Must have the same length as ``spec.base_params``.
+            fixed_indices (dict[str, list[int]] | None, optional): Indices to hold at default.. Defaults to None.
+
+        Raises:
+            TypeError: If ``value`` is not iterable (e.g. a bare float was passed).
+            ValueError: If ``len(value)`` does not match ``len(spec.base_params)``.
+        """
+        try:
+            value_seq = list(value)
+        except TypeError as te:
+            raise TypeError(
+                f"Parameter '{self.spec.name}' (joint): expected a sequence of "
+                f"{len(self.spec.base_params)} arrays (one per base_param) but "
+                f"got a non-iterable value of type {type(value).__name__}."
+            ) from te
+        
+        if len(value_seq) != len(self.spec.base_params):
             raise ValueError(
-                f"Parameter '{self.spec.name}': expected {len(self.spec.base_params)} "
-                f"arrays (one per base_param) but got {len(value_arr)}."
+                f"Parameter '{self.spec.name}' (joint): expected "
+                f"{len(self.spec.base_params)} arrays (one per base_param: "
+                f"{self.spec.base_params}) but got {len(value_seq)}."
             )
-        for parameter, val in zip(self.spec.base_params, value_arr):
+        
+        for parameter, val in zip(self.spec.base_params, value_seq):
             arr = ds[parameter].values.copy()
             if self.active_index is not None:
                 arr[self.active_index.index] = _as_scalar(val, parameter)
@@ -441,6 +532,15 @@ class JointParameter(Parameter, param_type="joint"):
             ds[parameter].values = arr
 
 
+# Freeze the registry now that all built-in subclasses are defined.
+# Any subclass registered after this point (e.g. via dynamic import of
+# untrusted code) will raise TypeError in __init_subclass__.
+_freeze_registry()
+
+# ----------------------------------------------------------------------------------------
+# Private helpers
+# ----------------------------------------------------------------------------------------
+
 def _broadcast_to_array(
     arr: np.ndarray,
     value: float | np.ndarray,
@@ -451,6 +551,11 @@ def _broadcast_to_array(
 
     Scalar value: broadcast to every non-fixed position.
     Array value: must match arr shape; fixed positions are skipped.
+    
+    The return type is always ``np.ndarray`` (or ``float`` for genuine 0-D
+    inputs). Callers assigning back to ``ds[var].values`` should be aware that
+    xarray will accept either, but downstream code expecting an ndarray should
+    guard against the scalar case if ``arr.ndim == 0``.
 
     Args:
         arr (np.ndarray): default array from dataset
