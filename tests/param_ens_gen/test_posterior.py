@@ -61,14 +61,14 @@ def test_post_init_invalid_string_raises(posterior_file):
             parameters=["param_a"],
         )
         
-def test_post_init_non_list_non_string_raises(posterior_file):
-    """__post_init__ raises ValueError for array_indices that is not a list or 'all'."""
-    with pytest.raises(ValueError, match="list of ints or 'all'"):
-        PosteriorSource(
+def test_post_init_non_list_converts(posterior_file):
+    """__post_init__ converts a scalar input for array_indices into a list."""
+    source = PosteriorSource(
             path=posterior_file,
             array_indices=42,
             parameters=["param_a"],
         )
+    assert source.array_indices == [42]
         
 def test_post_init_non_numeric_list_raises(posterior_file):
     """__post_init__ raises ValueError when list entries cannot be converted to int."""

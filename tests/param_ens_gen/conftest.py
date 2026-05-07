@@ -1,4 +1,4 @@
-"""Fixtures shared across param_gen tests."""
+"""Fixtures shared across param_ens_gen tests."""
 
 import numpy as np
 import pandas as pd
@@ -128,19 +128,6 @@ def joint_param_row() -> pd.Series:
         base_params="['fates_leafn_vert_scaler_coeff1', 'fates_leafn_vert_scaler_coeff2']",
     )
 
-
-@pytest.fixture
-def percent_row() -> pd.Series:
-    """A valid row for a parameter with percent-based bounds.
- 
-    Returns:
-        pd.Series: spreadsheet row
-    """
-    return _base_row(
-        parameter_name="fates_leaf_vcmax25top",
-        param_min="50percent",
-        param_max="50percent",
-    )
     
 # ========================================================================================
 # PosteriorSource fixtures
@@ -159,8 +146,8 @@ def posterior_file(tmp_path) -> "Path":
     rng = np.random.default_rng(42)
     n = 20
     data = pd.DataFrame({
-        "param_a": rng.permutation(np.linspace(0.1, 1.0, n)),
-        "param_b": rng.permutation(np.linspace(10.0, 20.0, n)),
+        "param_a": rng.permutation(np.linspace(0.0, 0.95, n)),
+        "param_b": rng.permutation(np.linspace(10.0, 19.5, n)),
     })
     path = tmp_path / "posterior.txt"
     data.to_csv(path, sep=" ", index=False)
@@ -179,6 +166,23 @@ def posterior_source(posterior_file) -> "PosteriorSource":
         path=posterior_file,
         array_indices="all",
         parameters=["param_a", "param_b"],
+    )
+
+# ===========================================================================
+# DistributionStat fixtures
+# ===========================================================================
+
+@pytest.fixture
+def percent_row() -> pd.Series:
+    """A valid row for a parameter with percent-based bounds.
+ 
+    Returns:
+        pd.Series: spreadsheet row
+    """
+    return _base_row(
+        parameter_name="fates_leaf_vcmax25top",
+        param_min="50percent",
+        param_max="50percent",
     )
 
 @pytest.fixture
@@ -208,6 +212,44 @@ def pft_row(pft_sheet) -> pd.Series:
         param_min="pft",
         param_max="pft",
     )
+
+# ===========================================================================
+# Sampler fixtures
+# ===========================================================================
+ 
+ 
+@pytest.fixture
+def posterior_config(posterior_file) -> dict:
+    """A minimal posterior_config dict pointing at posterior_file.
+ 
+    Covers a single broadcast source (array_indices='all') for two parameters.
+ 
+    Returns:
+        dict: posterior config
+    """
+    return {
+        "parameters": ["param_a", "param_b"],
+        "files": [
+            {
+                "path": str(posterior_file),
+                "array_indices": "all",
+            }
+        ],
+    }
+ 
+@pytest.fixture
+def pft_uniform_row(pft_sheet) -> pd.Series:
+    """A valid row for a uniform parameter with PFT-specific bounds."""
+    return _base_row(
+        parameter_name="fates_leaf_slatop",
+        strategy="uniform",
+        param_min="pft",
+        param_max="pft",
+    )
+
+# ===========================================================================
+# Parameter fixtures
+# ===========================================================================
 
 
 @pytest.fixture

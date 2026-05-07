@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 
@@ -48,7 +49,7 @@ class PosteriorSource:
     parameters: list[str]
     sort_param_index: int = _DEFAULT_SORT_INDEX
 
-    # Lazy-loaded state — not part of the public interface or constructor
+    # lazy-loaded state — not part of the public interface or constructor
     _draws: Optional[pd.DataFrame] = field(default=None, repr=False, init=False)
 
     def __post_init__(self):
@@ -62,10 +63,7 @@ class PosteriorSource:
                 )
         else:
             if not isinstance(self.array_indices, list):
-                raise ValueError(
-                    f"array_indices must be a list of ints or 'all', "
-                    f"got {type(self.array_indices).__name__}."
-                )
+                self.array_indices = [self.array_indices]
             try:
                 self.array_indices = [int(v) for v in self.array_indices]
             except (TypeError, ValueError) as e:
@@ -108,15 +106,15 @@ class PosteriorSource:
             df[self.parameters].sort_values(by=sort_col).reset_index(drop=True)
         )
 
-    def draw_row(self, value: float) -> pd.Series:
-        """Return one row using value as a quantile index.
+    def draw_row(self, normalized_value: float) -> pd.Series:
+        """Return one row using normalized_value as a quantile index.
 
         Args:
-            value (float): Value in [0, 1]. Maps to a row position in the sorted
-            pre-drawn subsample
+            normalized_value (float): Value in [0, 1]. Maps to a row position in the 
+            sorted pre-drawn data frame
 
         Raises:
-            RuntimeError: If prepare() has not been called yet.
+            RuntimeError: Dataframe is empty
 
         Returns:
             pd.Series: One row of posterior draws, indexed by variable name.
@@ -128,5 +126,32 @@ class PosteriorSource:
             raise RuntimeError (
                 f"PosteriorSource '{self.path}' is empty  - cannot sample."
             )
-        idx = min(int(value * n), n - 1)
+        idx = min(int(normalized_value * n), n - 1)
         return self._draws.iloc[idx]
+
+
+    def unscale(self, value: float) -> float:
+        """Find the quantile corresponding to a drawn value.
+
+        Args:
+            value (float): actual parameter input
+
+        Raises:
+            RuntimeError: Dataframe is empty
+            ValueError: input ``value`` is outside range of distribution
+
+        Returns:
+            pd.Series: One row of posterior draws, indexed by variable name.
+        """
+        if self._draws is None:
+            self._load()
+        n = len(self._draws)
+        if n == 0:
+            raise RuntimeError (
+                f"PosteriorSource '{self.path}' is empty  - cannot sample."
+            )
+        sort_col = self.parameters[self.sort_param_index]
+        col = self._draws[sort_col].values
+        idx = np.searchsorted(col, value)  # col is already sorted
+        idx = np.clip(idx, 0, len(col) - 1)
+        return float(idx) / len(col)

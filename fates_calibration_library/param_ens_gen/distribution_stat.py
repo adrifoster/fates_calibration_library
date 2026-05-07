@@ -43,11 +43,32 @@ ACCEPTED_STATS = {"min", "max", "mean", "sd"}
 
 
 class DistributionStat(ABC):
-    """Abstract base class for a set of stats for a single parameter."""
-    
+    """Abstract base class for a set of stats for a single parameter.
+
+    Subclasses must implement:
+    - resolve(self, default_value): return the actual stat value
+    """
+
     @staticmethod
-    def from_row(row: pd.Series, stat_type: str, pft_sheet: pd.DataFrame | None=None) -> DistributionStat:
-        
+    def from_row(
+        row: pd.Series, stat_type: str, pft_sheet: pd.DataFrame | None = None
+    ) -> DistributionStat:
+        """Factory method for creating a DistributionStat
+
+        Args:
+            row (pd.Series): one row of the input spreadsheet
+            stat_type (str): statistic type, must be one of ACCEPTED_STATS
+            pft_sheet (pd.DataFrame | None, optional): parameter-specific sheet for 
+                parameters with PFT-specific stats. Defaults to None.
+
+        Raises:
+            ValueError: cell for the requested stat is empty
+            ValueError: pft-specific stat, but no pft-sheet supplied
+
+        Returns:
+            DistributionStat: DistributionStat instance
+        """
+
         raw = str(row.get(f"param_{stat_type}")).strip().lower()
         if not raw:
             raise ValueError(
@@ -60,9 +81,8 @@ class DistributionStat(ABC):
                     f"param_{stat_type}='pft' but no pft_sheet was supplied."
                 )
             return PFTStat.from_sheet(pft_sheet, f"param_{stat_type}")
-        
+
         return DistributionStat.parse(raw, stat_type=stat_type)
-    
 
     @abstractmethod
     def resolve(
@@ -147,6 +167,11 @@ class DistributionStat(ABC):
                 raise ValueError(
                     f"Percent stat of 0 for param_{stat_type}='{cell_value}' is "
                     "not allowed. Use a non-zero percentage or a fixed value."
+                )
+            if percent < 0.0:
+                raise ValueError(
+                    f"Negative percents (param_{stat_type}='{cell_value}') are "
+                    "not allowed. Use a positive percentage."
                 )
             return PercentStat(percent=percent, stat_type=stat_type)
 

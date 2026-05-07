@@ -10,7 +10,7 @@ import numpy as np
 import xarray as xr
 
 from .param_spec import ParamSpec
-from .sampler import Sampler
+from .sampler import Sampler, SampleContext
 
 
 class DimIndex(NamedTuple):
@@ -198,13 +198,13 @@ class Parameter(ABC):
         self,
         normalized_value: float,
         default_ds: xr.Dataset,
-        fixed_indices: dict[str, list[int]],
     ) -> float | np.ndarray:
         """Sample a parameter given an input normalized value
 
-        The default implementation computes a free-dimension mask from
-        fixed_indices and delegates to self.sampler. Subclasses override
-        _sample_mask if they need different masking behaviour.
+        Builds a SampleContext from the dataset and fixed_indices, then
+        delegates to self.sampler. Subclasses override _build_context if
+        they need different context behaviour (e.g. JointParameter passes
+        mask=None).
 
         Args:
             normalized_value (float): normalized value [0-1] used to sample
@@ -216,32 +216,31 @@ class Parameter(ABC):
             float: Sampled parameter value.
         """
         default_value = self.get_default(default_ds)
-        mask = self._sample_mask(default_value, fixed_indices)
-        array_index = self.active_index.index if self.active_index is not None else None
-        return self.sampler.sample(
-            normalized_value, mask, default_value, array_index, self.n_indices
-        )
-
-    def _sample_mask(
+        context = self._build_context(default_value)
+        return self.sampler.sample(normalized_value, context)
+    
+    def _build_context(
         self,
         default_value: float | np.ndarray | list[np.ndarray],
-        fixed_indices: dict[str, list[int]],
-    ) -> np.ndarray | slice:
-        """Compute the mask of free (non-fixed) positions for sampling.
-
-        The default implementation derives the mask from free_dim and
-        fixed_indices. Subclasses override this when their sampler handles
-        masking differently (e.g. JointParameter returns None).
-
+    ) -> SampleContext:
+        """Build a SampleContext for this parameter.
+ 
+        The default implementation populates all fields. Subclasses override
+        this when their sampler needs different context (e.g. JointParameter
+        passes mask=None since its posterior sampler handles masking internally).
+ 
         Args:
-            default_value: Default value array for this parameter.
+            default_value: Default value(s) for this parameter.
             fixed_indices: Mapping of dimension name to fixed 0-based indices.
-
+ 
         Returns:
-            Boolean mask array (True = free), or slice(None) if nothing is fixed.
+            SampleContext populated for this parameter.
         """
-        return _free_mask(np.asarray(default_value), self.free_dim, fixed_indices)
-
+        return SampleContext(
+            default_value=default_value,
+            array_index=self.active_index.index if self.active_index is not None else None,
+            n_indices=self.n_indices,
+        )
 
 # ----------------------------------------------------------------------------------------
 # Concrete Parameter classes
@@ -406,14 +405,6 @@ class JointParameter(Parameter, param_type="joint"):
     def _variables_to_validate(self) -> list[str]:
         return self.spec.base_params
 
-    def _sample_mask(
-        self,
-        default_value: float | np.ndarray | list[np.ndarray],
-        fixed_indices: dict[str, list[int]],
-    ) -> None:
-        """Joint sampler handles masking internally; no mask is passed."""
-        return None
-
     def get_default(self, default_ds: xr.Dataset) -> list[np.ndarray]:
         return [default_ds[p].values for p in self.spec.base_params]
 
@@ -509,33 +500,3 @@ def _as_scalar(value: float | np.ndarray, name: str) -> float:
         )
     return float(arr)
 
-
-def _free_mask(
-    arr: np.ndarray,
-    free_dim: str | None,
-    fixed_indices: dict[str, list[int]],
-) -> np.ndarray | slice:
-    """Get an array mask of the fixed indices
-
-    Args:
-        arr (np.ndarray): input array
-        free_dim (str | None): dimension to scale along
-        fixed_indices (dict[str, list[int]]): Mapping of dimension
-            name to 0-based indices to hold at default.
-
-    Returns:
-        np.ndarray | slice: mask
-    """
-
-    # nothing to mask (we have a float)
-    if free_dim is None or arr.ndim == 0:
-        return slice(None)
-
-    # fixed indices doesn't exist on this dim
-    fixed = fixed_indices.get(free_dim, [])
-    if not fixed:
-        return slice(None)
-
-    mask = np.ones(arr.shape[0], dtype=bool)
-    mask[fixed] = False
-    return mask

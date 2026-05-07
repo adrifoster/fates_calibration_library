@@ -13,7 +13,7 @@ _REQUIRED_COLUMNS: frozenset[str] = frozenset({"parameter_name", "coord", "param
 
 
 @dataclass
-class ParamSpec: # pylint: disable=too-many-instance-attributes
+class ParamSpec:  # pylint: disable=too-many-instance-attributes
     """All metadata for a single calibratable parameter. Belongs to a Parameter object.
 
     Note:
