@@ -102,7 +102,7 @@ class Parameter(ABC):
         return subclass(row, default_ds, pft_sheet, posterior_config)
     
     @property
-    def free_dim(self):
+    def free_dim(self)-> str | None:
         """The single free dimension for this parameter, or None for scalars."""
         if self.spec.slice_dim is None:
             free_dims = self.spec.dims
@@ -385,7 +385,7 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
                 (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
             )
 
-            if arr.ndim == 0 or not self.spec.free_dims:
+            if arr.ndim == 0 or not self.free_dim:
                 arr = root_arr + delta
             else:
                 default_arr = default_ds[self.spec.base_params[0]].values
