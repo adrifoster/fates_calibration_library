@@ -97,20 +97,6 @@ class ParamSpec:  # pylint: disable=too-many-instance-attributes
                 f"is '{self.param_type}', not 'scale_from_root'."
             )
 
-    @property
-    def free_dims(self) -> list[str]:
-        """Dimensions that are not pinned by a slice.
-
-        For most parameters this is the same as dims. For 'sliced' params
-        slice_dim is removed, leaving only the dimensions that vary freely.
-
-        Returns:
-            list[str]: list of dimensions not pinned by a slice
-        """
-        if self.slice_dim is None:
-            return self.dims
-        return [d for d in self.dims if d != self.slice_dim]
-
     @classmethod
     def from_row(cls, row: pd.Series) -> ParamSpec:
         """Construct a ParamSpec from a single row of the main spreadsheet.

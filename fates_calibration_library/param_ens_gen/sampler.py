@@ -9,11 +9,11 @@ import pandas as pd
 import numpy as np
 
 from .distribution_stat import DistributionStat
-from .posterior import PosteriorSource, _DEFAULT_SORT_INDEX
+from .posterior_source import PosteriorSource, _DEFAULT_SORT_INDEX
 
 @dataclass
 class SampleContext:
-    """Sampling context passed from Parameter to Sampler.
+    """Sampling context passed to Sampler.
  
     Each Sampler subclass uses only the fields relevant to it and ignores
     the rest. This avoids a mixed-concern signature on the abstract interface
@@ -42,7 +42,7 @@ class SampleContext:
 
 
 class Sampler(ABC):
-    """Abstract base for Sampler class.
+    """Class for parameter sampling.
 
     Subclasses must implement:
         - __init__(self, row, pft_sheet, posterior_config): parse all
@@ -56,6 +56,39 @@ class Sampler(ABC):
     def __init_subclass__(cls, sampler_type: str, **kwargs):
         super().__init_subclass__(**kwargs)
         Sampler._registry[sampler_type] = cls
+        
+    @classmethod
+    def from_row_and_sheet(
+        cls,
+        row: pd.Series,
+        pft_sheet: pd.DataFrame | None = None,
+        posterior_config: dict | None = None,
+    ) -> Sampler:
+        """Construct Sampler from a main sheet row and pft_sheet.
+
+        Args:
+            row (pd.Series): A row from the main sheet.
+            pft_sheet (pd.DataFrame | None, optional): The per-parameter PFT sheet,
+                required when a relevant column is 'pft'. Ignored otherwise.
+                Defaults to None.
+
+        Raises:
+            Unknown strategy
+
+        Returns:
+            Sampler: Sampler
+        """
+        param_strategy = str(row.get("strategy", "")).strip()
+        subclass = cls._registry.get(param_strategy)
+        if subclass is None:
+            raise ValueError(
+                f"Unknown strategy '{param_strategy}'. "
+                f"Valid types: {sorted(cls._registry)}"
+            )
+        return subclass(
+            row, pft_sheet, posterior_config
+        )  # pylint: disable=not-callable
+
 
     @abstractmethod
     def sample(
@@ -90,39 +123,6 @@ class Sampler(ABC):
             float | np.ndarray: normalized value(s) in [0 to 1]
         """
 
-    @classmethod
-    def from_row_and_sheet(
-        cls,
-        row: pd.Series,
-        pft_sheet: pd.DataFrame | None = None,
-        posterior_config: dict | None = None,
-    ) -> Sampler:
-        """Construct Sampler from a main sheet row and pft_sheet.
-
-        Args:
-            row (pd.Series): A row from the main sheet.
-            pft_sheet (pd.DataFrame | None, optional): The per-parameter PFT sheet,
-                required when a relevant column is 'pft'. Ignored otherwise.
-                Defaults to None.
-
-        Raises:
-            Unknown strategy
-
-        Returns:
-            Sampler: Sampler
-        """
-        param_strategy = str(row.get("strategy", "")).strip()
-        subclass = cls._registry.get(param_strategy)
-        if subclass is None:
-            raise ValueError(
-                f"Unknown strategy '{param_strategy}'. "
-                f"Valid types: {sorted(cls._registry)}"
-            )
-        return subclass(
-            row, pft_sheet, posterior_config
-        )  # pylint: disable=not-callable
-
-
 class UniformSampler(Sampler, sampler_type="uniform"):
     """Uniform Sampler - scales between a minimum and a maximum given an input [0-1 value]
 
@@ -150,8 +150,8 @@ class UniformSampler(Sampler, sampler_type="uniform"):
                 "must both be 'pft' or neither — mixing is not supported."
             )
 
-        self.min_stat = DistributionStat.from_row(row, "min", pft_sheet)
-        self.max_stat = DistributionStat.from_row(row, "max", pft_sheet)
+        self.min_stat = DistributionStat.parse(row, "min", pft_sheet)
+        self.max_stat = DistributionStat.parse(row, "max", pft_sheet)
 
     def resolve_bounds(
         self,
@@ -180,17 +180,37 @@ class UniformSampler(Sampler, sampler_type="uniform"):
         context: SampleContext,
     ) -> float | np.ndarray:
         """Generate a sample for a parameter"""
+        if normalized_value > 1.0:
+            raise ValueError (
+                f"normalized_value={normalized_value}. "
+                "Cannot use a normalized_value greater than 1.0"
+            )
+        if normalized_value < 0.0:
+            raise ValueError (
+                f"normalized_value={normalized_value}. "
+                "Cannot use a normalized_value less than 0.0"
+            )
         min_val, max_val = self.resolve_bounds(context.default_value)
         return min_val + normalized_value * (max_val - min_val)
 
     def normalize(
         self,
-        value: float,
+        value: float | np.ndarray,
         context: SampleContext,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value."""
-
         min_val, max_val = self.resolve_bounds(context.default_value)
+        
+        if np.any(value > max_val):
+            raise ValueError (
+                f"value: {value} exceeds maximum value(s). "
+                f"maximum value is {max_val}"
+            )
+        if np.any(value < min_val):
+            raise ValueError (
+                f"value: {value} is below minimum value(s). "
+                f"minimum value is {min_val}"
+            )
         return (value - min_val) / (max_val - min_val)
 
 

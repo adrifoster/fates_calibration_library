@@ -104,7 +104,12 @@ class Parameter(ABC):
     @property
     def free_dim(self):
         """The single free dimension for this parameter, or None for scalars."""
-        return self.spec.free_dims[0] if self.spec.free_dims else None
+        if self.spec.slice_dim is None:
+            free_dims = self.spec.dims
+        else:
+            free_dims = [d for d in self.spec.dims if d != self.spec.slice_dim]
+        return free_dims[0] if free_dims else None
+    
 
     @property
     def n_indices(self) -> int:

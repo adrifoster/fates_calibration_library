@@ -53,6 +53,13 @@ class PosteriorSource:
     _draws: Optional[pd.DataFrame] = field(default=None, repr=False, init=False)
 
     def __post_init__(self):
+        """Validate attributes and set path to be an actual Path
+
+        Raises:
+            ValueError: 
+                array_indices is a string that is not "all"
+                array indices cannot be converted to an int list
+        """
         self.path = Path(self.path)
 
         if isinstance(self.array_indices, str):
@@ -114,11 +121,22 @@ class PosteriorSource:
             sorted pre-drawn data frame
 
         Raises:
+            ValueError: normalized_value outside allowed range
             RuntimeError: Dataframe is empty
 
         Returns:
             pd.Series: One row of posterior draws, indexed by variable name.
         """
+        if normalized_value > 1.0:
+            raise ValueError (
+                f"normalized_value={normalized_value}. "
+                "Cannot use a normalized_value greater than 1.0"
+            )
+        if normalized_value < 0.0:
+            raise ValueError (
+                f"normalized_value={normalized_value}. "
+                "Cannot use a normalized_value less than 0.0"
+            )
         if self._draws is None:
             self._load()
         n = len(self._draws)
@@ -150,8 +168,24 @@ class PosteriorSource:
             raise RuntimeError (
                 f"PosteriorSource '{self.path}' is empty  - cannot sample."
             )
+        if n == 1:
+            return 1.0
+        
         sort_col = self.parameters[self.sort_param_index]
+        max_val = self._draws[sort_col].iloc[-1]
+        min_val = self._draws[sort_col].iloc[0]
+        if value > max_val:
+            raise ValueError (
+                f"value: {value} > maximum value on dataset. "
+                f"maximum value is {max_val}"
+            )
+        if value < min_val:
+            raise ValueError (
+                f"value: {value} < minimum value on dataset. "
+                f"minimum value is {min_val}"
+            )
+        
         col = self._draws[sort_col].values
         idx = np.searchsorted(col, value)  # col is already sorted
         idx = np.clip(idx, 0, len(col) - 1)
-        return float(idx) / len(col)
+        return float(idx) / (len(col) - 1)

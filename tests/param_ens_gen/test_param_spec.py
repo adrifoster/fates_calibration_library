@@ -1,21 +1,4 @@
-"""Tests for param_ens_gen.param_spec: ParamSpec and its parsing helpers.
-
-Scope
------
-These tests cover only what ParamSpec is responsible for:
- 
-- Correct construction from a spreadsheet row (from_row)
-- Field-level invariants in __post_init__ that hold for *any* param_type
-  (slice fields on non-sliced, root_param on non-scale_from_root)
-- The free_dims property
- 
-Type-specific required-field validation (e.g. SlicedParameter needing
-slice_dim) belongs in test_parameter.py, co-located with the subclass
-that owns that constraint.
- 
-Parser correctness (NaN handling, list parsing, etc.) is tested through
-from_row rather than by importing private helpers directly.
-"""
+"""Tests for param_ens_gen.param_spec: ParamSpec and its parsing helpers."""
 
 
 import pytest
@@ -47,7 +30,6 @@ def test_from_row_scalar(scalar_row):
     """from_row correctly constructs a scalar parameter."""
     spec = ParamSpec.from_row(scalar_row)
     assert not spec.dims
-    assert not spec.free_dims
 
 
 def test_from_row_sliced(sliced_row):
@@ -153,27 +135,3 @@ def test_root_param_on_non_scale_raises(default_row):
     row["root_param"] = "fates_nonhydro_smpso"
     with pytest.raises(ValueError, match="root_param set but param_type"):
         ParamSpec.from_row(row)
-
-
-# ===========================================================================
-# ParamSpec.free_dims property
-# ===========================================================================
-
-
-def test_free_dims_no_slice(default_row):
-    """free_dims returns all dims when no slice_dim is set."""
-    spec = ParamSpec.from_row(default_row)
-    assert spec.free_dims == ["fates_pft"]
-
-
-def test_free_dims_with_slice(sliced_row):
-    """free_dims excludes slice_dim, leaving the remaining free dimensions."""
-    spec = ParamSpec.from_row(sliced_row)
-    assert "fates_leafage_class" not in spec.free_dims
-    assert "fates_pft" in spec.free_dims
-
-
-def test_free_dims_scalar(scalar_row):
-    """free_dims returns empty list for scalar parameters."""
-    spec = ParamSpec.from_row(scalar_row)
-    assert spec.free_dims == []
