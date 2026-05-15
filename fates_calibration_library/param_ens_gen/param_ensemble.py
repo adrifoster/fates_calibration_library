@@ -344,7 +344,7 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
             param = param_sample.parameter
             normalized_value = param_sample.normalized_value
             
-            value = param.sample(normalized_value, self.default_ds, self.fixed_indices)
+            value = param.sample(normalized_value, self.default_ds)
             
             param.set_value(
                 ds, self.default_ds, value, fixed_indices=self.fixed_indices

@@ -1,4 +1,10 @@
-"""Sampler class"""
+"""
+Sampler class
+
+This class in in charge of sampling a parameter given an input normalized_value, and
+normalizing a concrete parameter to a normalized value
+
+"""
 
 from __future__ import annotations
 from dataclasses import dataclass
@@ -38,7 +44,7 @@ class SampleContext:
  
     default_value: float | np.ndarray | list[np.ndarray] | None = None
     array_index: int | None = None
-    n_indices: int | None = None
+    n_indices: list[int] | None = None
 
 
 class Sampler(ABC):
@@ -64,7 +70,7 @@ class Sampler(ABC):
         pft_sheet: pd.DataFrame | None = None,
         posterior_config: dict | None = None,
     ) -> Sampler:
-        """Construct Sampler from a main sheet row and pft_sheet.
+        """Construct Sampler from a main sheet row, pft_sheet, or posterior_config
 
         Args:
             row (pd.Series): A row from the main sheet.
@@ -124,7 +130,7 @@ class Sampler(ABC):
         """
 
 class UniformSampler(Sampler, sampler_type="uniform"):
-    """Uniform Sampler - scales between a minimum and a maximum given an input [0-1 value]
+    """Uniform Sampler - scales between a minimum and a maximum given an input [0-1] value
 
     Attributes
     ===========
@@ -318,7 +324,7 @@ class PosteriorSampler(Sampler, sampler_type="posterior"):
             f"Check your posterior_sources.yaml."
         )
 
-    def _unscale_broadcast(self, value: float, n_indices: int) -> list[np.ndarray]:
+    def _unscale_broadcast(self, value: float, n_indices: list[int] | None) -> list[np.ndarray]:
         result = [np.zeros(n_indices) for _ in self.parameters]
         if len(self.sources) == 1 and self.sources[0].is_broadcast:
             unscaled = self.sources[0].unscale(value)
@@ -335,7 +341,7 @@ class PosteriorSampler(Sampler, sampler_type="posterior"):
                         result[k][array_idx] = row
         return result
     
-    def _draw_broadcast(self, normalized_value: float, n_indices: int) -> list[np.ndarray]:
+    def _draw_broadcast(self, normalized_value: float, n_indices: list[int] | None) -> list[np.ndarray]:
         result = [np.zeros(n_indices) for _ in self.parameters]
 
         if len(self.sources) == 1 and self.sources[0].is_broadcast:

@@ -10,7 +10,7 @@ import numpy as np
 import xarray as xr
 
 from .param_spec import ParamSpec
-from .sampler import Sampler, SampleContext
+from .sampler import Sampler, SampleContext, PosteriorSampler
 
 
 class DimIndex(NamedTuple):
@@ -41,29 +41,13 @@ class Parameter(ABC):
         Class for parameter sampling
     active_index: DimIndex | None
         Set by the expansion step on expanded Parameters. Records which dimension
-        and index this Parameter is responsible for. None on unexpanded Parameters.
-        
-    Notes
-    -----
-    Subclass registration
-        New subclasses are registered automatically via ``__init_subclass__``.
-        The registry is frozen at module load time (see ``_freeze_registry``),
-        so ``param_type`` values sourced from untrusted input (e.g. spreadsheets)
-        cannot invoke arbitrary classes added after import.
-    
+        and index this Parameter is responsible for. None on unexpanded Parameters.  
     """
 
     _registry: dict[str, type[Parameter]] = {}
-    _registry_frozen: bool = False
-
+    
     def __init_subclass__(cls, param_type: str, **kwargs):
         super().__init_subclass__(**kwargs)
-        if Parameter._registry_frozen:
-            raise TypeError(
-                f"Cannot register new Parameter subclass '{cls.__name__}': "
-                "the registry is frozen. Define all subclasses before module "
-                "load completes."
-            )
         Parameter._registry[param_type] = cls
 
     def __init__(
@@ -81,8 +65,9 @@ class Parameter(ABC):
         # this is used by the n_indices property without ordering constraints.
         self._dim_sizes: dict[str, int] = dict(default_ds.sizes)
 
-        self._validate_spec()
-        self._validate_dataset(default_ds)
+        self._validate_specs()
+        self._validate_params(default_ds)
+        self._validate_posterior()
 
     @classmethod
     def from_row(
@@ -118,34 +103,29 @@ class Parameter(ABC):
         return subclass(row, default_ds, pft_sheet, posterior_config)
     
     @property
-    def free_dim(self)-> str | None:
-        """The single free dimension for this parameter, or None for scalars.
+    def free_dims(self)-> str | list[str] | None :
+        """The free dimensions for this parameter, or None for scalars.
         
         For sliced parameters the slice dimension is excluded, leaving at most
         one free dimension. For scalar parameters (no dims) this returns None
         
         Returns:
-            str | None: Dimension name, or None when this parameter is scalar.
+            str | list[str] | None: Dimension name(s), or None when this parameter is scalar.
         
         """
         if self.spec.slice_dim is None:
             free_dims = self.spec.dims
         else:
             free_dims = [d for d in self.spec.dims if d != self.spec.slice_dim]
-        if len(free_dims) > 1:
-            raise ValueError(
-                f"free_dims: {free_dims} cannot be more than one dimension. "
-                "Not sure how to sample this type of parameter."
-            )
-        return free_dims[0] if free_dims else None
+        return free_dims if free_dims else None
     
 
     @property
-    def n_indices(self) -> int:
+    def n_indices(self) -> list[int]:
         """Number of positions along the free dimension (1 for scalars)."""
-        return self._dim_sizes.get(self.free_dim, 1) if self.free_dim else 1
+        return [self._dim_sizes.get(dim, 1) for dim in self.free_dims] if self.free_dims else [1]
 
-    def _validate_spec(self) -> None:
+    def _validate_specs(self) -> None:
         """Validate type-specific required fields on self.spec.
 
         Called from __init__ after self.spec is set. The base implementation
@@ -154,7 +134,7 @@ class Parameter(ABC):
         fields (e.g. DefaultParameter) need not override.
         """
 
-    def _validate_dataset(self, default_ds: xr.Dataset) -> None:
+    def _validate_params(self, default_ds: xr.Dataset) -> None:
         """Check that all variables this parameter touches exist in default_ds
         with the correct dimensions.
 
@@ -183,6 +163,36 @@ class Parameter(ABC):
                     f"{self.spec.dims}. Dimensions must match exactly."
                 )
 
+    def _validate_posterior(self):
+        if not isinstance(self.sampler, PosteriorSampler):
+            return
+        for source in self.sampler.sources:
+            if not np.array_equal(source.parameters, self._variables_to_validate()):
+                raise ValueError(
+                    f"Parameter '{self.spec.name}': mismatch in `base_params` "
+                    "and `parameters` on PosteriorSource "
+                    f"PosteriorSource parameters: {source.parameters} "
+                    f"`base_params`: {self._variables_to_validate()}"
+                )
+            if not source.is_broadcast:
+                if len(self.n_indices) > 1:
+                    raise ValueError(
+                        f"Parameter '{self.spec.name}': has dimensions {self.n_indices} "
+                        "And has a PosteriorSampler not using broadcast mode. "
+                        "Currently this is not supported. " 
+                        "PosteriorSampler parameters must have only one dimension or "
+                        "have array_indices = 'all'"
+                    )    
+                # we must check that the input array_indices will fit in this dim
+                if np.any(source.array_indices < self.n_indices[0]):
+                        raise ValueError(
+                            f"Parameter '{self.spec.name}': dimension mismatch between "
+                            "default dataset and posterior sampler array_indices. "
+                            f"array_indices: {source.array_indices} "
+                            f"parameter indices: {self.n_indices[0]}."
+                        ) 
+            
+
     @abstractmethod
     def _variables_to_validate(self) -> list[str]:
         """Return the variable names in the dataset that this parameter touches.
@@ -195,39 +205,7 @@ class Parameter(ABC):
         Returns:
             List of variable name strings.
         """
-
-    @abstractmethod
-    def get_default(
-        self,
-        default_ds: xr.Dataset,
-    ) -> float | np.ndarray | list[np.ndarray]:
-        """Extract the relevant default value(s) from a netCDF dataset.
-
-        Args:
-            default_ds (xr.Dataset): The default parameter dataset
-
-        Returns:
-            float | np.ndarray | list[np.ndarray]: default value
-        """
-
-    @abstractmethod
-    def set_value(
-        self,
-        ds: xr.Dataset,
-        default_ds: xr.Dataset,
-        value: float | np.ndarray | list[np.ndarray],
-        fixed_indices: dict[str, list[int]] | None = None,
-    ) -> None:
-        """Write a value into the working dataset.
-
-        Args:
-            ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
-            default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
-            value (float | np.ndarray | list[np.ndarray]): Value to write
-            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
-                0-based indices to hold at default. None means no indices are fixed
-        """
-
+        
     def sample(
         self,
         normalized_value: float,
@@ -271,19 +249,39 @@ class Parameter(ABC):
             array_index=self.active_index.index if self.active_index is not None else None,
             n_indices=self.n_indices,
         )
+
+    @abstractmethod
+    def get_default(
+        self,
+        default_ds: xr.Dataset,
+    ) -> float | np.ndarray | list[np.ndarray]:
+        """Extract the relevant default value(s) from a netCDF dataset.
+
+        Args:
+            default_ds (xr.Dataset): The default parameter dataset
+
+        Returns:
+            float | np.ndarray | list[np.ndarray]: default value
+        """
+
+    @abstractmethod
+    def set_value(
+        self,
+        ds: xr.Dataset,
+        default_ds: xr.Dataset,
+        value: float | np.ndarray | list[np.ndarray],
+        fixed_indices: dict[str, list[int]] | None = None,
+    ) -> None:
+        """Write a value into the working dataset.
+
+        Args:
+            ds (xr.Dataset): Working copy of the parameter dataset. Modified in place.
+            default_ds (xr.Dataset): Unchanging default dataset. Used to restore fixed positions.
+            value (float | np.ndarray | list[np.ndarray]): Value to write
+            fixed_indices (dict[str, list[int]] | None): Run-level mapping of dimension to
+                0-based indices to hold at default. None means no indices are fixed
+        """
     
-def _freeze_registry():
-    """Prevent further registration of Parameter subclasses.
-
-    Called once at the bottom of this module, after all built-in subclasses
-    are defined. Any attempt to define a new Parameter subclass after this
-    point (e.g. from untrusted spreadsheet-driven code) will raise TypeError.
-
-    This is a defence-in-depth measure: ``param_type`` strings sourced from
-    user input can only ever resolve to the classes that existed at import time.
-    """
-    Parameter._registry_frozen = True
-
 # ----------------------------------------------------------------------------------------
 # Concrete Parameter classes
 # ----------------------------------------------------------------------------------------
@@ -321,7 +319,7 @@ class DefaultParameter(Parameter, param_type="default"):
 class SlicedParameter(Parameter, param_type="sliced"):
     """Parameter that targets one slice of a dimension."""
 
-    def _validate_spec(self) -> None:
+    def _validate_specs(self) -> None:
         """Require slice_dim, slice_index, and base_params to all be set. Also len(base_params) == 1."""
         missing = []
         if self.spec.slice_dim is None:
@@ -396,7 +394,7 @@ class ScaleFromRootParameter(Parameter, param_type="scale_from_root"):
         than an error.
     """
 
-    def _validate_spec(self) -> None:
+    def _validate_specs(self) -> None:
         """Require root_param and base_params to both be set. Also len(base_params) == 1."""
         missing = []
         if self.spec.root_param is None:
@@ -467,7 +465,7 @@ class JointParameter(Parameter, param_type="joint"):
     
     """
 
-    def _validate_spec(self):
+    def _validate_specs(self):
         """Require base_params to be non-empty."""
         if not self.spec.base_params:
             raise ValueError(
@@ -530,12 +528,6 @@ class JointParameter(Parameter, param_type="joint"):
                 arr = _broadcast_to_array(arr, val, fixed, parameter)
 
             ds[parameter].values = arr
-
-
-# Freeze the registry now that all built-in subclasses are defined.
-# Any subclass registered after this point (e.g. via dynamic import of
-# untrusted code) will raise TypeError in __init_subclass__.
-_freeze_registry()
 
 # ----------------------------------------------------------------------------------------
 # Private helpers
