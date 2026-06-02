@@ -23,6 +23,6 @@ def read_param_list(
     pft_sheets = {}
     for sheet in xl.sheet_names:
         if sheet != "main":
-            pft_sheets[f"fates_{sheet}"] = pd.read_excel(xl, sheet_name=sheet)
+            pft_sheets[f"{sheet}"] = pd.read_excel(xl, sheet_name=sheet)
     return main, pft_sheets
 

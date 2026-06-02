@@ -308,9 +308,7 @@ class DefaultParameter(Parameter, param_type="default"):
         if self.active_index is not None:
             arr[self.active_index.index] = _as_scalar(value, self.spec.name)
         else:
-            fixed = (
-                (fixed_indices or {}).get(self.free_dim, []) if self.free_dim else []
-            )
+            fixed = {}
             arr = _broadcast_to_array(arr, value, fixed, self.spec.name)
 
         ds[self.spec.name].values = arr

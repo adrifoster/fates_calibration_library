@@ -114,7 +114,7 @@ class ParamEnsemble(ABC):
                     row,
                     pft_sheet=pft_sheets.get(row["parameter_name"]),
                     default_ds=self.default_ds,
-                    posterior_config=posterior_config.get(row["parameter_name"]),
+                    posterior_config=posterior_config.get(row["parameter_name"]) if config.posterior_sources else None,
                 )
                 for _, row in main.iterrows()
             ]
@@ -441,7 +441,7 @@ class OneAtATimeParameterEnsemble(ParamEnsemble, ensemble_type="OAT"):
             cfg = OneAtATimeConfig(**config)
         except TypeError as e:
             raise TypeError(
-                f"Invalid config key for LatinHypercubeEnsemble: {e}. "
+                f"Invalid config key for OneAtATimeConfig: {e}. "
                 f"Valid keys: {[f.name for f in fields(OneAtATimeConfig)]}"
             ) from e
         return cls(cfg)
@@ -486,8 +486,7 @@ class OneAtATimeParameterEnsemble(ParamEnsemble, ensemble_type="OAT"):
         normalized_value = param_sample.normalized_value
         
         ds = self.default_ds.copy(deep=False)
-        value = param.scale(normalized_value, self.default_ds, self.scaler,
-                            self.fixed_indices)
+        value = param.sample(normalized_value, self.default_ds)
         param.set_value(ds, self.default_ds, value, fixed_indices=self.fixed_indices)
             
         return ds
