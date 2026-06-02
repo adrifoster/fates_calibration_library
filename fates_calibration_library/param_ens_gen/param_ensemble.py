@@ -15,6 +15,7 @@ import xarray as xr
 from .parameter import Parameter
 from .ensemble_config import EnsembleConfig, LatinHypercubeConfig, OneAtATimeConfig
 from .sort_params import sort_params
+from .utils import read_param_list
 
 @dataclass
 class ParameterSample:
@@ -85,7 +86,7 @@ class ParamEnsemble(ABC):
         config: EnsembleConfig,
     ):
 
-        main, pft_sheets = _read_param_list(config.param_data_file)
+        main, pft_sheets = read_param_list(config.param_data_file)
 
         # subset to only a list of parameters if supplied
         if config.param_list is not None:
@@ -343,7 +344,7 @@ class LatinHypercubeEnsemble(ParamEnsemble, ensemble_type="LatinHypercube"):
             param = param_sample.parameter
             normalized_value = param_sample.normalized_value
             
-            value = param.sample(normalized_value, self.default_ds, self.fixed_indices)
+            value = param.sample(normalized_value, self.default_ds)
             
             param.set_value(
                 ds, self.default_ds, value, fixed_indices=self.fixed_indices
@@ -535,30 +536,6 @@ class OneAtATimeParameterEnsemble(ParamEnsemble, ensemble_type="OAT"):
             )
         return param_df.drop(columns=['normalized_value'])
     
-    
-
-def _read_param_list(
-    param_data_file: Path,
-) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
-    """Read in the excel file that sets up all the parameters
-
-    Args:
-        param_data_file (Path): path to excel file
-
-    Returns:
-        tuple[pd.DataFrame, dict[str, pd.DataFrame]]: main dataframe, dictionary of
-        sheets with pft-specific parameter values
-    """
-
-    xl = pd.ExcelFile(param_data_file, engine="xlrd")
-    main = pd.read_excel(xl, sheet_name="main")
-
-    pft_sheets = {}
-    for sheet in xl.sheet_names:
-        if sheet != "main":
-            pft_sheets[f"fates_{sheet}"] = pd.read_excel(xl, sheet_name=sheet)
-    return main, pft_sheets
-
 
 def _generate_suffix(ensemble_number: int, pad_length: int = 3) -> str:
     """Generate a suffix for an ensemble member

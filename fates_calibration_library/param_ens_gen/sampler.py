@@ -1,56 +1,68 @@
-"""Sampler class"""
+"""
+Sampler class
+
+This class in in charge of sampling a parameter given an input normalized_value, and
+normalizing a concrete parameter to a normalized value
+
+"""
 
 from __future__ import annotations
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 import pandas as pd
 import numpy as np
 
-from .distribution_stat import DistributionStat, PFTStat
-from .posterior import PosteriorSource, _DEFAULT_SORT_INDEX
+from .distribution_stat import DistributionStat
+from .posterior_source import PosteriorSource, _DEFAULT_SORT_INDEX
+
+@dataclass
+class SampleContext:
+    """Sampling context passed to Sampler.
+ 
+    Each Sampler subclass uses only the fields relevant to it and ignores
+    the rest. This avoids a mixed-concern signature on the abstract interface
+    where some arguments are only meaningful to one subclass.
+ 
+    Attributes
+    ----------
+    default_value : float | np.ndarray | list[np.ndarray] | None
+        Default value(s) for this parameter from the dataset.
+        Required by UniformSampler to resolve percent bounds.
+        Ignored by PosteriorSampler.
+    array_index : int | None
+        The active array index when sampling an expanded (per-index) parameter.
+        None when sampling all free indices together (broadcast mode).
+        Used by PosteriorSampler to select the correct PosteriorSource.
+        Ignored by UniformSampler.
+    n_indices : int
+        Total number of positions along the free dimension (1 for scalars).
+        Used by PosteriorSampler in broadcast mode to size the output arrays.
+        Ignored by UniformSampler.
+    """
+ 
+    default_value: float | np.ndarray | list[np.ndarray] | None = None
+    array_index: int | None = None
+    n_indices: list[int] | None = None
 
 
 class Sampler(ABC):
-    """Abstract base for Sampler class."""
+    """Class for parameter sampling.
+
+    Subclasses must implement:
+        - __init__(self, row, pft_sheet, posterior_config): parse all
+          sampling configuration from the spreadsheet row at construction time.
+        - sample(self, normalized_value, context): draw a value given a normalised input.
+        - normalize(self, value, context): convert a concrete value back to normalised [0, 1].
+    """
 
     _registry: dict[str, type[Sampler]] = {}
 
     def __init_subclass__(cls, sampler_type: str, **kwargs):
         super().__init_subclass__(**kwargs)
         Sampler._registry[sampler_type] = cls
-
-    @abstractmethod
-    def __init__(
-        self,
-        row: pd.Series,
-        pft_sheet: pd.DataFrame | None = None,
-        posterior_config: dict | None = None,
-    ):
-        """Concrete class must implement this"""
-
-    @abstractmethod
-    def sample(
-        self,
-        normalized_value: float,
-        mask: np.ndarray | None = None,
-        default_value: float | np.ndarray | None = None,
-        array_index: int | None = None,
-        n_indices: int | None = None,
-    ):
-        """Generate a sample for a parameter"""
-
-    @abstractmethod
-    def normalize(
-        self,
-        value: float | np.ndarray,
-        mask: np.ndarray | None = None,
-        default_value: float | np.ndarray | None = None,
-        array_index: int | None = None,
-        n_indices: int | None = None,
-    ) -> float | np.ndarray:
-        """Convert a concrete parameter value into a normalized [0, 1] value."""
-
+        
     @classmethod
     def from_row_and_sheet(
         cls,
@@ -58,7 +70,7 @@ class Sampler(ABC):
         pft_sheet: pd.DataFrame | None = None,
         posterior_config: dict | None = None,
     ) -> Sampler:
-        """Construct Sampler from a main sheet row and pft_sheet.
+        """Construct Sampler from a main sheet row, pft_sheet, or posterior_config
 
         Args:
             row (pd.Series): A row from the main sheet.
@@ -79,11 +91,46 @@ class Sampler(ABC):
                 f"Unknown strategy '{param_strategy}'. "
                 f"Valid types: {sorted(cls._registry)}"
             )
-        return subclass(row, pft_sheet, posterior_config)
+        return subclass(
+            row, pft_sheet, posterior_config
+        )  # pylint: disable=not-callable
 
+
+    @abstractmethod
+    def sample(
+        self,
+        normalized_value: float,
+        context: SampleContext,
+    ) -> float | np.ndarray:
+        """Generate a sample for a parameter
+
+        Args:
+            normalized_value (float): normalized [0-1] input value
+            context: Sampling context. Each subclass uses the fields relevant to its 
+                strategy and ignores the rest.
+        Returns:
+            float | np.ndarray: sampled parameter value.
+        """
+
+    @abstractmethod
+    def normalize(
+        self,
+        value: float | np.ndarray,
+        context: SampleContext,
+    ) -> float | np.ndarray:
+        """Convert a concrete parameter value into a normalized [0, 1] value.
+
+        Args:
+            value (float | np.ndarray): concrete parameter to normalize
+            context: Sampling context. Each subclass uses the fields relevant to its 
+                strategy and ignores the rest.
+            
+        Returns:
+            float | np.ndarray: normalized value(s) in [0 to 1]
+        """
 
 class UniformSampler(Sampler, sampler_type="uniform"):
-    """Uniform Sampler - scales between a minimum and a maximum given an input [0-1 value]
+    """Uniform Sampler - scales between a minimum and a maximum given an input [0-1] value
 
     Attributes
     ===========
@@ -103,31 +150,17 @@ class UniformSampler(Sampler, sampler_type="uniform"):
         min_raw = str(row.get("param_min", "")).strip().lower()
         max_raw = str(row.get("param_max", "")).strip().lower()
 
-        if min_raw == "" or max_raw == "":
+        if (min_raw == "pft") != (max_raw == "pft"):
             raise ValueError(
-                "Parameters with strategy=uniform must supply a 'param_min' and 'param_max' value"
+                f"Parameter '{row.get('parameter_name')}': param_min and param_max "
+                "must both be 'pft' or neither — mixing is not supported."
             )
 
-        if min_raw == "pft" or max_raw == "pft":
-            if min_raw != max_raw:
-                raise ValueError(
-                    f"Parameter '{row.get('parameter_name')}': param_min and param_max "
-                    "must both be 'pft' or neither — mixing is not supported."
-                )
-            if pft_sheet is None:
-                raise ValueError(
-                    f"Parameter '{row.get('parameter_name')}' has "
-                    "param_min or param_max == 'pft' but no pft_sheet was supplied."
-                )
-            self.min_stat = PFTStat.from_sheet(pft_sheet, "param_min")
-            self.max_stat = PFTStat.from_sheet(pft_sheet, "param_max")
-        else:
-            self.min_stat = DistributionStat.parse(min_raw, stat_type="min")
-            self.max_stat = DistributionStat.parse(max_raw, stat_type="max")
+        self.min_stat = DistributionStat.parse(row, "min", pft_sheet)
+        self.max_stat = DistributionStat.parse(row, "max", pft_sheet)
 
     def resolve_bounds(
         self,
-        mask: np.ndarray | None,
         default_value: float | np.ndarray | None,
     ) -> tuple[float | np.ndarray, float | np.ndarray]:
         """Resolve min and max bounds and return (min_val, max_val).
@@ -141,38 +174,49 @@ class UniformSampler(Sampler, sampler_type="uniform"):
         """
 
         min_val = self.min_stat.resolve(default_value)
-        max_val = self.min_stat.resolve(default_value)
+        max_val = self.max_stat.resolve(default_value)
 
-        _validate_bounds(min_val, max_val, mask=mask)
+        _validate_bounds(min_val, max_val)
 
         return min_val, max_val
 
     def sample(
         self,
         normalized_value: float,
-        mask: np.ndarray | None = None,
-        default_value: float | np.ndarray | None = None,
-        array_index: int | None = None,
-        n_indices: int | None = None,
-    ):
-
-        min_val, max_val = self.resolve_bounds(mask, default_value)
-
+        context: SampleContext,
+    ) -> float | np.ndarray:
+        """Generate a sample for a parameter"""
+        if normalized_value > 1.0:
+            raise ValueError (
+                f"normalized_value={normalized_value}. "
+                "Cannot use a normalized_value greater than 1.0"
+            )
+        if normalized_value < 0.0:
+            raise ValueError (
+                f"normalized_value={normalized_value}. "
+                "Cannot use a normalized_value less than 0.0"
+            )
+        min_val, max_val = self.resolve_bounds(context.default_value)
         return min_val + normalized_value * (max_val - min_val)
 
     def normalize(
         self,
-        value: float,
-        mask: np.ndarray | None = None,
-        default_value: float | np.ndarray | None = None,
-        array_index: int | None = None,
-        n_indices: int | None = None,
+        value: float | np.ndarray,
+        context: SampleContext,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value."""
-
-        min_val, max_val = self.resolve_bounds(mask, default_value)
-
-        # normalize
+        min_val, max_val = self.resolve_bounds(context.default_value)
+        
+        if np.any(value > max_val):
+            raise ValueError (
+                f"value: {value} exceeds maximum value(s). "
+                f"maximum value is {max_val}"
+            )
+        if np.any(value < min_val):
+            raise ValueError (
+                f"value: {value} is below minimum value(s). "
+                f"minimum value is {min_val}"
+            )
         return (value - min_val) / (max_val - min_val)
 
 
@@ -205,45 +249,73 @@ class PosteriorSampler(Sampler, sampler_type="posterior"):
                 path=Path(file_entry["path"]),
                 array_indices=file_entry["array_indices"],
                 parameters=self.parameters,
-                sort_index=posterior_config.get("sort_index", _DEFAULT_SORT_INDEX),
+                sort_param_index=posterior_config.get("sort_index", _DEFAULT_SORT_INDEX),
             )
             for file_entry in posterior_config["files"]
         ]
         self.sources = sources
-
-        for source in self.sources:
-            source.prepare()
-
+        
     def sample(
         self,
         normalized_value: float,
-        mask: np.ndarray | None = None,
-        default_value: float | np.ndarray | None = None,
-        array_index: int | None = None,
-        n_indices: int | None = None,
-    ):
-        if array_index is not None:
-            return self._draw_for_index(normalized_value, array_index)
-        else:
-            return self._draw_broadcast(normalized_value, n_indices)
+        context: SampleContext,
+    ) -> float | np.ndarray:
+        """Generate a sample for a parameter"""
+        if context.array_index is not None:
+            return self._draw_for_index(normalized_value, context.array_index)
+        return self._draw_broadcast(normalized_value, context.n_indices)
 
     def normalize(
         self,
         value: float | np.ndarray,
-        mask: np.ndarray | None = None,
-        default_value: float | np.ndarray | None = None,
-        array_index: int | None = None,
-        n_indices: int | None = None,
+        context: SampleContext,
     ) -> float | np.ndarray:
         """Convert a concrete parameter value into a normalized [0, 1] value."""
-        pass
+        if context.array_index is not None:
+            return self._unscale_for_index(value, context.array_index)
+        return self._unscale_broadcast(value, context.n_indices)
+        
+    
+    def _draw_for_index(self, normalized_value: float, array_index: int) -> list[np.ndarray]:
+        """draws from a PosteriorSource given an input array_index
 
-    def _draw_for_index(self, value: float, array_index: int) -> list[np.ndarray]:
+        Args:
+            normalized_value (float): input normalized [0-1] value to use as quantile
+            array_index (int): array index we are pulling for
+
+        Returns:
+            list[np.ndarray]: output parameter value(s)
+        """
         source = self._source_for_index(array_index)
-        row = source.draw_row(value)
+        row = source.draw_row(normalized_value)
         return [np.array([row[v]]) for v in self.parameters]
+    
+    def _unscale_for_index(self, value: float, array_index: int) -> float:
+        """convert a concrete parameter value into a normalized [0-1] value for a 
+        specific array index
+
+        Args:
+            value (float): concrete parameter value
+            array_index (int): array index to use
+
+        Returns:
+            float: normalized value
+        """
+        source = self._source_for_index(array_index)
+        return source.unscale(value)
 
     def _source_for_index(self, array_index: int) -> PosteriorSource:
+        """Return the correct PosteriorSource given an input index
+
+        Args:
+            array_index (int): input array_index for PosteriorSource
+
+        Raises:
+            ValueError: No source found for the input array index
+
+        Returns:
+            PosteriorSource: Correct PosteriorSource
+        """
         for source in self.sources:
             if source.is_broadcast or array_index in source.array_indices:
                 return source
@@ -252,16 +324,33 @@ class PosteriorSampler(Sampler, sampler_type="posterior"):
             f"Check your posterior_sources.yaml."
         )
 
-    def _draw_broadcast(self, value: float, n_indices: int) -> list[np.ndarray]:
+    def _unscale_broadcast(self, value: float, n_indices: list[int] | None) -> list[np.ndarray]:
+        result = [np.zeros(n_indices) for _ in self.parameters]
+        if len(self.sources) == 1 and self.sources[0].is_broadcast:
+            unscaled = self.sources[0].unscale(value)
+            for k, var in enumerate(self.parameters):
+                result[k][:] = unscaled
+        else:
+            for source in self.sources:
+                row = source.unscale(0.01)
+                indices = (
+                    range(n_indices) if source.is_broadcast else source.array_indices
+                )
+                for array_idx in indices:
+                    for k, var in enumerate(self.parameters):
+                        result[k][array_idx] = row
+        return result
+    
+    def _draw_broadcast(self, normalized_value: float, n_indices: list[int] | None) -> list[np.ndarray]:
         result = [np.zeros(n_indices) for _ in self.parameters]
 
         if len(self.sources) == 1 and self.sources[0].is_broadcast:
-            row = self.sources[0].draw_row(value)
+            row = self.sources[0].draw_row(normalized_value)
             for k, var in enumerate(self.parameters):
                 result[k][:] = row[var]
         else:
             for source in self.sources:
-                row = source.draw_row(value)
+                row = source.draw_row(normalized_value)
                 indices = (
                     range(n_indices) if source.is_broadcast else source.array_indices
                 )
@@ -275,7 +364,6 @@ class PosteriorSampler(Sampler, sampler_type="posterior"):
 def _validate_bounds(
     min_val: float | np.ndarray,
     max_val: float | np.ndarray,
-    mask: np.ndarray | None = None,
 ) -> None:
     """Raise error if any min > max after resolution
 
@@ -288,15 +376,12 @@ def _validate_bounds(
     """
     if min_val is None or max_val is None:
         raise ValueError(
-            f"Parameter min or max is None  - cannot scale"
+            f"Parameter min or max is None  - cannot scale "
             f"(min={min_val}, max={max_val}). Check inputs"
         )
 
     min_arr = np.asarray(min_val)
     max_arr = np.asarray(max_val)
-    if mask is not None and min_arr.ndim > 0:
-        min_arr = min_arr[mask]
-        max_arr = max_arr[mask]
     if np.any(min_arr > max_arr):
         raise ValueError(
             f"Parameter has min > max " f"(min={min_val}, max={max_val}). Check inputs"

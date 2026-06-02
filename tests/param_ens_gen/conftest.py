@@ -1,13 +1,20 @@
-"""Fixtures shared across param_gen tests."""
+"""Fixtures shared across param_ens_gen tests."""
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 import pytest
+from pathlib import Path
+
+from fates_calibration_library.param_ens_gen.posterior_source import PosteriorSource
 
 N_PFTS = 3
 N_LEAFAGE = 2
 N_ORGANS = 4
+
+# ========================================================================================
+# ParamSpec fixtures
+# ========================================================================================
 
 def _base_row(**kwargs) -> pd.Series:
     """Build a minimal valid main-sheet row, with overrides."""
@@ -119,11 +126,96 @@ def joint_param_row() -> pd.Series:
         coord="['fates_pft']",
         param_type="joint",
         strategy="posterior",
-        param_min="posterior",
-        param_max="posterior",
+        param_min="",
+        param_max="",
         base_params="['fates_leafn_vert_scaler_coeff1', 'fates_leafn_vert_scaler_coeff2']",
     )
 
+    
+# ========================================================================================
+# PosteriorSource fixtures
+# ========================================================================================
+
+@pytest.fixture
+def posterior_file(tmp_path) -> Path:
+    """A minimal posterior text file with two parameters and 20 rows.
+ 
+    Columns: param_a, param_b
+    Values are shuffled so that _load's sort behaviour is actually tested.
+ 
+    Returns:
+        Path: path to the temporary file
+    """
+    rng = np.random.default_rng(42)
+    n = 20
+    data = pd.DataFrame({
+        "param_a": rng.permutation(np.linspace(0.0, 0.95, n)),
+        "param_b": rng.permutation(np.linspace(10.0, 19.5, n)),
+    })
+    path = tmp_path / "posterior.txt"
+    data.to_csv(path, sep=" ", index=False)
+    return path
+
+@pytest.fixture
+def posterior_file_2(tmp_path) -> Path:
+    """A second minimal posterior file for multi-source tests."""
+    rng = np.random.default_rng(99)
+    n = 20
+    data = pd.DataFrame({
+        "param_a": rng.permutation(np.linspace(1.0, 1.95, n)),
+        "param_b": rng.permutation(np.linspace(20.0, 29.5, n)),
+    })
+    path = tmp_path / "posterior_2.txt"
+    data.to_csv(path, sep=" ", index=False)
+    return path
+
+
+@pytest.fixture
+def empty_posterior_file(tmp_path) -> Path:
+    """An empty posterior text file with two parameters.
+ 
+    Columns: param_a, param_b
+ 
+    Returns:
+        Path: path to the temporary file
+    """
+    data = pd.DataFrame({
+        "param_a": [],
+        "param_b": [],
+    })
+    path = tmp_path / "empty_posterior.txt"
+    data.to_csv(path, sep=" ", index=False)
+    return path
+ 
+@pytest.fixture
+def posterior_source(posterior_file) -> PosteriorSource:
+    """A PosteriorSource pointing at posterior_file, not yet loaded.
+ 
+    Returns:
+        PosteriorSource: unloaded source
+    """
+    return PosteriorSource(
+        path=posterior_file,
+        array_indices="all",
+        parameters=["param_a", "param_b"],
+    )
+
+@pytest.fixture
+def empty_posterior_source(empty_posterior_file) -> PosteriorSource:
+    """A PosteriorSource pointing at empty_posterior_file, not yet loaded.
+ 
+    Returns:
+        PosteriorSource: unloaded source
+    """
+    return PosteriorSource(
+        path=empty_posterior_file,
+        array_indices="all",
+        parameters=["param_a", "param_b"],
+    )
+
+# ===========================================================================
+# DistributionStat fixtures
+# ===========================================================================
 
 @pytest.fixture
 def percent_row() -> pd.Series:
@@ -137,7 +229,6 @@ def percent_row() -> pd.Series:
         param_min="50percent",
         param_max="50percent",
     )
-
 
 @pytest.fixture
 def pft_sheet() -> pd.DataFrame:
@@ -166,6 +257,66 @@ def pft_row(pft_sheet) -> pd.Series:
         param_min="pft",
         param_max="pft",
     )
+
+# ===========================================================================
+# Sampler fixtures
+# ===========================================================================
+ 
+ 
+@pytest.fixture
+def posterior_config(posterior_file) -> dict:
+    """A minimal posterior_config dict pointing at posterior_file.
+ 
+    Covers a single broadcast source (array_indices='all') for two parameters.
+ 
+    Returns:
+        dict: posterior config
+    """
+    return {
+        "parameters": ["param_a", "param_b"],
+        "files": [
+            {
+                "path": str(posterior_file),
+                "array_indices": "all",
+            }
+        ],
+    }
+
+@pytest.fixture
+def multi_source_posterior_config(posterior_file, posterior_file_2) -> dict:
+    """A posterior_config dict pointing at two non-broadcast sources covering different indices.
+ 
+    Returns:
+        dict: posterior config
+    """
+    return {
+        "parameters": ["param_a", "param_b"],
+        "files": [
+            {
+                "path": str(posterior_file),
+                "array_indices": [0, 1],
+            },
+            {
+                "path": str(posterior_file_2),
+                "array_indices": [2]
+            }
+        ],
+    }
+ 
+ 
+@pytest.fixture
+def pft_uniform_row(pft_sheet) -> pd.Series:
+    """A valid row for a uniform parameter with PFT-specific bounds."""
+    return _base_row(
+        parameter_name="fates_leaf_slatop",
+        strategy="uniform",
+        param_min="pft",
+        param_max="pft",
+    )
+
+# ===========================================================================
+# Parameter fixtures
+# ===========================================================================
 
 
 @pytest.fixture
